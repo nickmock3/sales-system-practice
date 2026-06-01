@@ -53,6 +53,30 @@ order by ValidFrom desc
 limit 1;
 ```
 
+## 物理DB命名方針
+
+本番想定 DB である Oracle Database を意識し、物理DB上のテーブル名、カラム名、インデックス名、制約名は `UPPER_SNAKE_CASE` とする。
+
+仕様書や C# コード上では読みやすさのため `ProductVersions`、`ProductId`、`ValidFrom` のような PascalCase 名を使ってよいが、EF Core のマッピングでは以下のように物理名へ変換する。
+
+```text
+ProductVersions -> PRODUCT_VERSIONS
+ProductId       -> PRODUCT_ID
+ValidFrom       -> VALID_FROM
+```
+
+Oracle では引用符なしの識別子が大文字扱いになるため、原則として大文字の `UPPER_SNAKE_CASE` 名を明示し、引用符が必要な大小文字混在名には依存しない。
+
+## DB実装方針
+
+- ID は C# の `long` とする。
+- 日付・日時は C# の `DateTime` とする。
+- `SalesDate` と `ValidFrom` は `DateTime` で保持するが、業務上は日付部分のみを有効とする。
+- 税区分は `string` で保持し、アプリケーション側の定数で管理する。
+- マスタ、履歴、売上は物理削除しない。
+- 外部キーの削除動作は `Restrict` を基本とする。
+- `CreatedAt` はアプリケーション側で UTC 現在日時を設定する。
+
 ## 履歴設計ルール
 
 - 履歴レコードは原則更新しない。
@@ -149,4 +173,3 @@ backend/
 外部システム連携は初期スコープには含めず、将来拡張として扱う。
 
 実装する場合は Outbox Pattern を使い、売上登録などの業務データ更新と同じトランザクションでイベントを `OutboxMessages` に保存する。
-
