@@ -102,3 +102,74 @@
 - 履歴取得ロジックの実装方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+完了日: 2026-06-01
+
+### 追加したエンドポイント
+
+- `GET /api/products`
+  - JST の業務日付時点で有効な商品履歴を商品ごとに1件取得する。
+  - `productCode`, `name`, `isDiscontinued` で絞り込みできる。
+- `POST /api/products`
+  - `Products` と初回 `ProductVersions` を同時に登録する。
+  - `CreatedAt` はアプリケーション側で UTC 現在日時を設定する。
+- `GET /api/products/{productId}/versions`
+  - 商品履歴を `ValidFrom` 降順で取得する。
+- `POST /api/products/{productId}/versions`
+  - 既存履歴を更新せず、新しい商品履歴を追加する。
+- `GET /api/products/{productId}/preview?targetDate=yyyy-MM-dd`
+  - 指定日以前で一番新しい商品履歴を取得する。
+  - 初回 `ValidFrom` より前の日付では `404 Not Found` を返す。
+
+### 設定した認可要件
+
+- 参照系 API は `AuthenticatedUser` ポリシーを要求する。
+- 登録・履歴追加 API は `MasterMaintainer` ポリシーを要求する。
+
+### 主な DTO とバリデーション
+
+- 入力 DTO
+  - `CreateProductRequest`
+  - `CreateProductVersionRequest`
+- レスポンス DTO
+  - `ProductListItemResponse`
+  - `ProductResponse`
+  - `ProductVersionResponse`
+- バリデーション
+  - 商品コード: 必須、最大30文字。
+  - 商品名: 必須、最大100文字。
+  - 単位: 必須、最大20文字。
+  - 標準単価: 0以上、小数2桁まで。
+  - 税区分: 必須、最大30文字。
+  - `ValidFrom`: 必須。
+  - `ValidFrom` は日付比較の業務ルールに合わせて `.Date` に正規化して保存する。
+- `CreatedAt` は UTC 日時として保存し、一覧の「現在日付」は `IBusinessClock` で JST の業務日付として解決する。
+
+### 履歴取得ロジックの実装方針
+
+- 適用履歴は EF Core LINQ で `ValidFrom <= targetDate.Date`、`OrderByDescending(ValidFrom)`、`ThenByDescending(Id)`、`FirstOrDefaultAsync` により取得する。
+- 一覧取得では `ProductVersions` を `ProductId` で集計し、JST 業務日付以前の最大 `ValidFrom` を求めてから `Products` と `ProductVersions` に join する。
+- Oracle provider での変換を見据え、一覧取得の最新履歴選択は相関サブクエリの `Take(1)` ではなく `GroupBy`、`Max`、`Join` で表現する。
+- DB 固有 SQL は使わず、Oracle provider でも変換可能な LINQ で表現した。
+- 同じ `ProductId` と `ValidFrom` の重複は事前チェックで `409 Conflict` を返し、競合登録に備えて `DbUpdateException` も `409 Conflict` に変換する。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx
+```
+
+結果:
+
+- 成功
+- 合格: 24
+- 失敗: 0
+
+### Oracle 対応で後続確認が必要な点
+
+- 商品一覧の「商品ごとに最新履歴1件を選ぶ」LINQ が Oracle provider で期待通りの SQL に変換されること。
+- `DateTime.Date` 正規化後の `ValidFrom <= targetDate` 比較が Oracle の日付型で意図通り動くこと。
+- `Contains` による商品コード・商品名検索の SQL 変換と大文字小文字・照合順序の扱い。
+- 一意制約違反時の `DbUpdateException` 詳細は provider ごとに異なるため、必要なら Oracle の例外コード単位でエラー判定を精緻化すること。

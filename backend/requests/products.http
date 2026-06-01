@@ -1,0 +1,46 @@
+@baseUrl = http://localhost:5165
+@user = master1
+@roles = MasterMaintainer
+
+### 商品一覧
+GET {{baseUrl}}/api/products?isDiscontinued=false
+X-Dummy-User: {{user}}
+
+### 商品新規登録
+POST {{baseUrl}}/api/products
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "productCode": "P001",
+  "name": "コピー用紙 A4",
+  "unit": "箱",
+  "standardUnitPrice": 1200,
+  "taxCategory": "STANDARD",
+  "isDiscontinued": false,
+  "validFrom": "2026-01-01"
+}
+
+### 商品履歴一覧
+GET {{baseUrl}}/api/products/1/versions
+X-Dummy-User: {{user}}
+
+### 商品履歴追加
+POST {{baseUrl}}/api/products/1/versions
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "name": "コピー用紙 A4 改定",
+  "unit": "箱",
+  "standardUnitPrice": 1300,
+  "taxCategory": "STANDARD",
+  "isDiscontinued": false,
+  "validFrom": "2026-04-01"
+}
+
+### 指定日プレビュー
+GET {{baseUrl}}/api/products/1/preview?targetDate=2026-04-15
+X-Dummy-User: {{user}}

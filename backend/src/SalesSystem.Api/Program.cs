@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
+using SalesSystem.Api.Features.Products;
 using SalesSystem.Api.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IBusinessClock, BusinessClock>();
 builder.Services.AddSalesSystemPersistence(builder.Configuration);
 builder.Services.AddSalesSystemAuth();
 
@@ -33,6 +36,8 @@ app.MapGet("/health", async (AppDbContext dbContext, CancellationToken cancellat
         : Results.Problem("Database connection failed", statusCode: StatusCodes.Status503ServiceUnavailable);
 })
 .WithName("GetHealth");
+
+app.MapProductEndpoints();
 
 app.Run();
 
