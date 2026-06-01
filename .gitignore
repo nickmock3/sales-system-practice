@@ -1,0 +1,81 @@
+# OS / editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+wallet/
+Wallet_*/
+
+# .NET / ASP.NET Core
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.nupkg
+*.snupkg
+packages/
+artifacts/
+coverage/
+coverage.xml
+coverage.cobertura.xml
+
+# Entity Framework / local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.mdf
+*.ldf
+
+# Node.js / Next.js / Bun
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+.vercel/
+.bun/
+bunfig.local.toml
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# TypeScript / frontend tooling
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs and runtime output
+logs/
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Temporary files
+tmp/
+temp/
+.cache/

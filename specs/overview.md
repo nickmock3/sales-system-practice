@@ -1,0 +1,152 @@
+# 販売管理システム 全体仕様
+
+## 目的
+
+C# / .NET とフロントエンド技術の練習として、販売管理システムのうち「売上」に関係する最小構成のアプリケーションを作成する。
+
+商品分野は法人向け事務用品販売とする。
+
+扱う商品例:
+
+- コピー用紙 A4
+- ボールペン 黒
+- クリアファイル
+- トナー
+- ノートPCスタンド
+
+## 初期スコープ
+
+作成する画面:
+
+- 商品マスタ
+- 得意先マスタ
+- 売上入力画面
+
+売上一覧・売上詳細は、売上入力画面の一部として扱う。
+
+## 実装優先順位
+
+1. 商品マスタの一覧、登録、履歴追加
+2. 得意先マスタの一覧、登録、履歴追加
+3. 売上入力
+4. 売上一覧、詳細
+5. 指定日プレビューや履歴確認
+
+今回の学習では、売上日を基準にマスタ履歴と税率を自動適用する UI を重視する。
+
+## データ設計方針
+
+マスタはイミュータブルモデルを意識し、「同一性を表すテーブル」と「変更される属性の履歴テーブル」を分ける。
+
+商品名、単位、標準単価、販売停止フラグ、得意先名、住所、電話番号など、後から変更される可能性がある項目は履歴テーブルに持たせる。
+
+履歴テーブルは `ValidFrom` のみを持ち、`ValidTo` は持たない。
+
+適用する履歴は、対象日以前で一番新しい履歴とする。
+
+```sql
+select *
+from ProductVersions
+where ProductId = @productId
+  and ValidFrom <= @salesDate
+order by ValidFrom desc
+limit 1;
+```
+
+## 履歴設計ルール
+
+- 履歴レコードは原則更新しない。
+- マスタの変更は履歴レコードの追加で表現する。
+- 同じマスタ ID で同じ `ValidFrom` の履歴を重複させない。
+- 初回の `ValidFrom` より前の売上日は、適用できる履歴が存在しないものとして扱う。
+- 販売停止や得意先情報の変更も履歴レコードの追加で表現する。
+- 税率変更も `TaxRates` の追加で表現する。
+
+## 技術構成
+
+### バックエンド
+
+- C#
+- .NET
+- ASP.NET Core Web API
+- Entity Framework Core
+- SQLite ファイルDB
+- xUnit
+
+通常実行時は SQLite ファイルDBを使用し、テストでは SQLite in-memory を使用する。
+
+EF Core の `UseInMemoryDatabase` はリレーショナルDBではないため、今回は SQLite in-memory を使って外部キー制約や SQL 実行に近い挙動を確認する。
+
+SQLite in-memory は接続を閉じるとデータベースが消えるため、テスト中は同じ DB 接続を開いたままにする。
+
+### フロントエンド
+
+- Next.js
+- TypeScript
+- Bun
+
+## バックエンド構成方針
+
+バックエンドは機能別ディレクトリを最上位に置く。
+
+その中で、必要に応じて `Api`、`Application`、`Domain`、`Infrastructure` に分ける。
+
+すべての機能に同じ厚さで Clean Architecture や DDD を適用するのではなく、業務ルールが複雑な機能だけ設計を厚くする。
+
+想定構成:
+
+```text
+backend/
+  src/
+    SalesSystem.Api/
+      Features/
+        Products/
+          Api/
+          Application/
+          Domain/
+          Infrastructure/
+        Customers/
+          Api/
+          Application/
+          Domain/
+          Infrastructure/
+        Sales/
+          Api/
+          Application/
+          Domain/
+          Infrastructure/
+        Taxes/
+          Application/
+          Infrastructure/
+      Persistence/
+      Program.cs
+  tests/
+    SalesSystem.Tests/
+      Features/
+        Products/
+        Customers/
+        Sales/
+        Taxes/
+```
+
+機能ごとの設計の厚さ:
+
+- `Products`: 履歴管理、商品コード、税区分などのルールがあるため、軽めの DDD / CQRS を使う。
+- `Customers`: 履歴管理はあるがルールは比較的少ないため、Application 中心で必要に応じて Domain を使う。
+- `Sales`: 売上日から商品履歴、得意先履歴、税率を決め、金額と税額を計算するため、DDD 寄りにする。
+- `Taxes`: 売上日以前の税率を取得するだけに近いため、最初はシンプルに実装する。
+
+## 初期スコープ外
+
+### 割引
+
+割引は初期スコープには含めず、拡張課題として扱う。
+
+将来的に追加する場合は、得意先別割引、商品別割引、キャンペーン割引などを別テーブルで管理する。
+
+### 外部システム連携
+
+外部システム連携は初期スコープには含めず、将来拡張として扱う。
+
+実装する場合は Outbox Pattern を使い、売上登録などの業務データ更新と同じトランザクションでイベントを `OutboxMessages` に保存する。
+
