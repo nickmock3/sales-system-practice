@@ -103,6 +103,39 @@ EF Core の `UseInMemoryDatabase` はリレーショナルDBではないため�
 
 SQLite in-memory は接続を閉じるとデータベースが消えるため、テスト中は同じ DB 接続を開いたままにする。
 
+## 認証認可方針
+
+実務では API に認証認可が必要になるため、このリポジトリでも ASP.NET Core の Authentication / Authorization を使う。
+
+ただし、学習用の初期スコープでは本物のログイン、パスワード管理、ユーザー登録、トークン発行、外部 ID 基盤連携は作らない。
+
+認証方式は開発・学習用のダミー認証とし、HTTP ヘッダーからユーザー名とロールを読み取る。
+
+```http
+X-Dummy-User: user1
+X-Dummy-Roles: MasterMaintainer
+```
+
+- `X-Dummy-User` がある場合は認証済みユーザーとして扱う。
+- `X-Dummy-User` がない場合は未認証として扱う。
+- `X-Dummy-Roles` はカンマ区切りで複数ロールを指定できる。
+- `X-Dummy-Roles` がない場合はロールなしの認証済みユーザーとして扱う。
+
+認可ポリシーは以下を用意する。
+
+- `AuthenticatedUser`: 認証済みユーザーを要求する。
+- `MasterMaintainer`: `MasterMaintainer` ロールを要求する。
+
+業務 API の認可方針は以下とする。
+
+- 参照系 API は `AuthenticatedUser` を要求する。
+- 登録、変更、履歴追加などの更新系 API は `MasterMaintainer` を要求する。
+- `/health` は認証不要とする。
+
+ダミー認証は本番利用できる認証方式として扱わない。
+
+後から JWT、Cookie、Microsoft Entra ID などへ差し替える場合でも、業務 API 側は ASP.NET Core 標準の認可ポリシーに依存し、ダミー認証のヘッダー名へ直接依存しないようにする。
+
 ### フロントエンド
 
 - Next.js
