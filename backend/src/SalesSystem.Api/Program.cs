@@ -15,7 +15,6 @@ if (app.Environment.IsDevelopment())
 
 app.MapGet("/health", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
 {
-    await dbContext.Database.EnsureCreatedAsync(cancellationToken);
     var canConnect = await dbContext.Database.CanConnectAsync(cancellationToken);
 
     return canConnect
