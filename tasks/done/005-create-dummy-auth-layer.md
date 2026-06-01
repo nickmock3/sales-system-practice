@@ -82,3 +82,54 @@ X-Dummy-Roles: MasterMaintainer,SalesOperator
 - 追加したポリシー
 - 実行した確認コマンド
 - 本番認証へ差し替える場合の後続課題
+
+## 完了記録
+
+### 追加した認証認可の構成
+
+- `SalesSystem.Api.Auth` 名前空間にダミー認証関連の構成を追加した。
+- `DummyAuthenticationHandler` で ASP.NET Core 標準の AuthenticationHandler を使い、HTTP ヘッダーから ClaimsPrincipal を作成するようにした。
+- `AddSalesSystemAuth()` 拡張メソッドで Authentication / Authorization をまとめて登録するようにした。
+- `Program.cs` で `AddSalesSystemAuth()`、`UseAuthentication()`、`UseAuthorization()` を有効化した。
+- 開発・テスト用に `/_auth-test/authenticated` と `/_auth-test/master-maintainer` を追加し、ポリシー通過を確認できるようにした。
+- テスト用に `HttpClient` へ認証ヘッダーを付与する `SetDummyUser()` helper を追加した。
+
+### ダミー認証ヘッダーの仕様
+
+- `X-Dummy-User` が空または未指定の場合は未認証として扱う。
+- `X-Dummy-User` が指定された場合は、その値をユーザー名として認証済みユーザーを作成する。
+- `X-Dummy-Roles` はカンマ区切りで複数ロールを指定できる。
+- `X-Dummy-Roles` が未指定の場合は、ロールなしの認証済みユーザーとして扱う。
+
+### 追加したポリシー
+
+- `AuthenticatedUser`: 認証済みユーザーを要求する。
+- `MasterMaintainer`: `MasterMaintainer` ロールを要求する。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx
+```
+
+結果:
+
+- 成功
+- 合格: 14
+- 失敗: 0
+- スキップ: 0
+
+確認した内容:
+
+- `/health` は認証ヘッダーなしで `200 OK` になる。
+- 認証が必要なエンドポイントで `X-Dummy-User` なしの場合は `401 Unauthorized` になる。
+- `MasterMaintainer` が必要なエンドポイントでロール不足の場合は `403 Forbidden` になる。
+- `X-Dummy-User` と `X-Dummy-Roles: MasterMaintainer` がある場合は `MasterMaintainer` ポリシーを通過できる。
+- `X-Dummy-Roles: SalesOperator, MasterMaintainer` のような複数ロール指定でも `MasterMaintainer` ポリシーを通過できる。
+
+### 本番認証へ差し替える場合の後続課題
+
+- ダミー認証ハンドラーを JWT、Cookie、Microsoft Entra ID などの本番用認証方式へ差し替える。
+- 業務 API 側はヘッダー名ではなく認可ポリシーへ依存する構成を維持する。
+- ロール名やポリシー名を外部 ID 基盤のクレーム設計と対応付ける。
+- 本番環境では `/_auth-test/*` のような開発・テスト用エンドポイントを公開しない運用にする。

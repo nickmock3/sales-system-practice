@@ -1,17 +1,28 @@
 using Microsoft.EntityFrameworkCore;
+using SalesSystem.Api.Auth;
 using SalesSystem.Api.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddSalesSystemPersistence(builder.Configuration);
+builder.Services.AddSalesSystemAuth();
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+
+    app.MapGet("/_auth-test/authenticated", () => Results.Ok(new { status = "authenticated" }))
+        .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
+    app.MapGet("/_auth-test/master-maintainer", () => Results.Ok(new { status = "master-maintainer" }))
+        .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 }
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/health", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
 {

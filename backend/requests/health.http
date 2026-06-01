@@ -4,3 +4,16 @@ GET {{SalesSystem.Api_HostAddress}}/health
 Accept: application/json
 
 ###
+
+GET {{SalesSystem.Api_HostAddress}}/_auth-test/authenticated
+Accept: application/json
+X-Dummy-User: user1
+
+###
+
+GET {{SalesSystem.Api_HostAddress}}/_auth-test/master-maintainer
+Accept: application/json
+X-Dummy-User: user1
+X-Dummy-Roles: MasterMaintainer,SalesOperator
+
+###
