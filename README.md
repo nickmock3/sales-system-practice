@@ -48,3 +48,38 @@ dotnet test
 ```
 
 テストでは SQLite in-memory を使用します。SQLite での成功は Oracle 互換を保証するものではないため、Oracle 固有の確認は後続タスクで行います。
+
+## Frontend
+
+フロントエンドは Next.js / TypeScript / Bun で構成します。
+
+### 環境変数
+
+```sh
+cd frontend
+cp .env.example .env.local
+```
+
+`.env.local` で API 接続先を切り替えます。このファイルは Git 管理しません。
+
+```sh
+NEXT_PUBLIC_API_BASE_URL=http://localhost:5134
+```
+
+### 起動
+
+```sh
+cd frontend
+bun install
+bun run dev
+```
+
+デフォルトでは `http://localhost:3000` でトップページを表示できます。
+
+### ビルドと lint
+
+```sh
+cd frontend
+bun run lint
+bun run build
+```
