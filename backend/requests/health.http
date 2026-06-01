@@ -1,0 +1,6 @@
+@SalesSystem.Api_HostAddress = http://localhost:5134
+
+GET {{SalesSystem.Api_HostAddress}}/health
+Accept: application/json
+
+###
