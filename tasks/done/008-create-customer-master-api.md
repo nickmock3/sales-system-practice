@@ -101,3 +101,66 @@
 - 履歴取得ロジックの実装方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+完了日: 2026-06-02
+
+### 追加したエンドポイント
+
+- `GET /api/customers`
+  - 現在業務日付時点で有効な得意先履歴を一覧取得する。
+  - `customerCode` と `name` で部分一致検索できる。
+- `POST /api/customers`
+  - `Customers` と初回 `CustomerVersions` を同時に登録する。
+- `GET /api/customers/{customerId}/versions`
+  - 指定得意先の履歴を `ValidFrom` 降順で取得する。
+- `POST /api/customers/{customerId}/versions`
+  - 既存履歴を更新せず、新しい得意先履歴を追加する。
+- `GET /api/customers/{customerId}/preview?targetDate=yyyy-MM-dd`
+  - 指定日以前で一番新しい得意先履歴を取得する。
+
+### 設定した認可要件
+
+- 参照系 API は `AuthenticatedUser` を要求する。
+- 登録・履歴追加 API は `MasterMaintainer` ロールを要求する。
+
+### 主な DTO とバリデーション
+
+- `CustomerListItemResponse`
+- `CustomerResponse`
+- `CustomerVersionResponse`
+- `CreateCustomerRequest`
+- `CreateCustomerVersionRequest`
+
+入力バリデーションは以下を実装した。
+
+- 得意先コード: 必須、最大 30 文字。
+- 得意先名: 必須、最大 100 文字。
+- 住所: 必須、最大 300 文字。
+- 電話番号: 必須、最大 30 文字。
+- `ValidFrom`: 必須。
+
+登録時は文字列を `Trim()` し、`ValidFrom` は `.Date` で日付部分のみを保存する。
+
+### 履歴取得ロジックの実装方針
+
+- 一覧取得では、`CustomerVersions` を `CustomerId` でグループ化し、業務日付以前の最大 `ValidFrom` を取得してから得意先本体と履歴を JOIN する。
+- 指定日プレビューでは、`ValidFrom <= targetDate.Date` の履歴を `ValidFrom` 降順、`Id` 降順で並べ、先頭 1 件を取得する。
+- 初回 `ValidFrom` より前の日付では `404 Not Found` を返し、適用できる履歴がないことを表現する。
+- 既存の履歴行は更新せず、変更はすべて `CustomerVersions` の新規行追加で表現する。
+- 同一 `CustomerId` と `ValidFrom` の重複は API 側の事前確認と DB 一意制約違反の捕捉で競合エラーにする。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx
+```
+
+結果: 47 件成功、失敗 0 件。
+
+### Oracle 対応で後続確認が必要な点
+
+- 一覧取得のグループ化 + JOIN による現在履歴取得クエリが Oracle EF Core provider で期待通り SQL 変換されること。
+- `ValidFrom` の日付比較が Oracle の `DATE`/`TIMESTAMP` マッピングで時刻混入時にも業務日付として扱えること。
+- 一意制約違反時の `DbUpdateException` が Oracle provider でも API の競合レスポンスとして扱えること。

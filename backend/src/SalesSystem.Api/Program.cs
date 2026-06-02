@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
+using SalesSystem.Api.Features.Customers;
 using SalesSystem.Api.Features.Products;
 using SalesSystem.Api.Features.Taxes;
 using SalesSystem.Api.Persistence;
@@ -39,6 +40,7 @@ app.MapGet("/health", async (AppDbContext dbContext, CancellationToken cancellat
 .WithName("GetHealth");
 
 app.MapProductEndpoints();
+app.MapCustomerEndpoints();
 app.MapTaxRateEndpoints();
 
 app.Run();

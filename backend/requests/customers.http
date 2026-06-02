@@ -1,0 +1,47 @@
+@baseUrl = http://localhost:5165
+@masterUser = master1
+@masterRoles = MasterMaintainer
+@user = user1
+
+### 得意先一覧
+GET {{baseUrl}}/api/customers
+X-Dummy-User: {{user}}
+
+### 得意先一覧 得意先コード・得意先名検索
+GET {{baseUrl}}/api/customers?customerCode=CUST001&name=株式会社
+X-Dummy-User: {{user}}
+
+### 得意先新規登録
+POST {{baseUrl}}/api/customers
+Content-Type: application/json
+X-Dummy-User: {{masterUser}}
+X-Dummy-Roles: {{masterRoles}}
+
+{
+  "customerCode": "CUST001",
+  "name": "株式会社サンプル",
+  "address": "東京都千代田区1-1-1",
+  "phoneNumber": "03-1234-5678",
+  "validFrom": "2026-01-01"
+}
+
+### 得意先履歴一覧
+GET {{baseUrl}}/api/customers/1/versions
+X-Dummy-User: {{user}}
+
+### 得意先履歴追加
+POST {{baseUrl}}/api/customers/1/versions
+Content-Type: application/json
+X-Dummy-User: {{masterUser}}
+X-Dummy-Roles: {{masterRoles}}
+
+{
+  "name": "株式会社サンプル 営業部",
+  "address": "東京都中央区2-2-2",
+  "phoneNumber": "03-2345-6789",
+  "validFrom": "2026-04-01"
+}
+
+### 指定日プレビュー
+GET {{baseUrl}}/api/customers/1/preview?targetDate=2026-04-15
+X-Dummy-User: {{user}}
