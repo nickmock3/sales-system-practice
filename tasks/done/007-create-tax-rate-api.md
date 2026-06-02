@@ -85,3 +85,62 @@
 - 税率取得ロジックの実装方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+完了日: 2026-06-02
+
+### 追加したエンドポイント
+
+- `GET /api/tax-rates`
+  - 税率一覧を取得する。
+  - `taxCategory` クエリで税区分を完全一致検索できる。
+  - `ValidFrom` 降順、同日内は `Id` 降順で返す。
+- `POST /api/tax-rates`
+  - 税率履歴を新規レコードとして追加する。
+  - 同じ `TaxCategory` と `ValidFrom` の重複登録は `409 Conflict` とする。
+- `GET /api/tax-rates/preview?taxCategory=...&targetDate=yyyy-MM-dd`
+  - 指定日以前で一番新しい税率を返す。
+  - 初回 `ValidFrom` より前の日付では `404 Not Found` とする。
+
+### 設定した認可要件
+
+- 参照系 API (`GET /api/tax-rates`, `GET /api/tax-rates/preview`) は `AuthenticatedUser` を要求する。
+- 登録 API (`POST /api/tax-rates`) は `MasterMaintainer` を要求する。
+
+### 主な DTO とバリデーション
+
+- `TaxRateResponse`
+  - `TaxRateId`
+  - `TaxCategory`
+  - `Rate`
+  - `ValidFrom`
+- `CreateTaxRateRequest`
+  - `TaxCategory`
+  - `Rate`
+  - `ValidFrom`
+- バリデーション
+  - 税区分は必須、最大 30 文字。
+  - 税率は 0 以上、小数 4 桁まで。
+  - `ValidFrom` は必須。
+  - 登録時の `ValidFrom` とプレビュー時の `targetDate` は日付部分のみを使うため `.Date` に丸める。
+
+### 税率取得ロジックの実装方針
+
+- 履歴取得は EF Core LINQ で `TaxCategory == category && ValidFrom <= date` に絞り込み、`OrderByDescending(ValidFrom).ThenByDescending(Id).FirstOrDefaultAsync()` で取得する。
+- Oracle 対応を見据え、DB 固有 SQL ではなく LINQ のみで表現した。
+- 重複登録は API 側の事前確認に加え、競合登録に備えて `DbUpdateException` も `409 Conflict` に変換する。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx
+```
+
+結果: 成功。34 件合格。
+
+### Oracle 対応で後続確認が必要な点
+
+- Oracle provider 上で `ValidFrom <= date`、`OrderByDescending(...).FirstOrDefaultAsync()` が期待どおりの SQL と実行計画になること。
+- `decimal(5,4)` 相当の税率精度と一意制約 `TaxCategory + ValidFrom` が Oracle 実 DB 上で期待どおり機能すること。
+- `DateTime.Date` で丸めた値を Oracle の日時型へ保存・比較したとき、時刻混入が業務日付判定へ影響しないこと。

@@ -1,0 +1,23 @@
+@baseUrl = http://localhost:5165
+@user = master1
+@roles = MasterMaintainer
+
+### 税率一覧
+GET {{baseUrl}}/api/tax-rates?taxCategory=STANDARD
+X-Dummy-User: {{user}}
+
+### 税率登録
+POST {{baseUrl}}/api/tax-rates
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "taxCategory": "STANDARD",
+  "rate": 0.1,
+  "validFrom": "2026-01-01"
+}
+
+### 指定日税率プレビュー
+GET {{baseUrl}}/api/tax-rates/preview?taxCategory=STANDARD&targetDate=2026-04-15
+X-Dummy-User: {{user}}
