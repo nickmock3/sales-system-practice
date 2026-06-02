@@ -1,0 +1,37 @@
+@baseUrl = http://localhost:5165
+@user = master1
+@roles = MasterMaintainer
+
+### 売上一覧
+GET {{baseUrl}}/api/sales?salesDateFrom=2026-04-01&salesDateTo=2026-04-30&customerCode=CUST001
+X-Dummy-User: {{user}}
+
+### 売上詳細
+GET {{baseUrl}}/api/sales/1
+X-Dummy-User: {{user}}
+
+### 売上プレビュー(得意先)
+GET {{baseUrl}}/api/sales/preview-customer?customerId=1&salesDate=2026-04-15
+X-Dummy-User: {{user}}
+
+### 売上プレビュー(商品)
+GET {{baseUrl}}/api/sales/preview-product?productId=1&salesDate=2026-04-15
+X-Dummy-User: {{user}}
+
+### 売上登録
+POST {{baseUrl}}/api/sales
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "salesDate": "2026-04-15",
+  "customerId": 1,
+  "lines": [
+    {
+      "productId": 1,
+      "quantity": 1.005,
+      "unitPrice": 100.01
+    }
+  ]
+}

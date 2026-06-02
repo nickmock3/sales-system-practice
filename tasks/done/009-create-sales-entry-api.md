@@ -122,3 +122,36 @@
 - 金額計算と丸めの実装方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+- 追加したエンドポイント
+  - `POST /api/sales`
+  - `GET /api/sales`
+  - `GET /api/sales/{saleId}`
+  - `GET /api/sales/preview-customer`
+  - `GET /api/sales/preview-product`
+- 設定した認可要件
+  - 参照系は `AuthenticatedUser`
+  - 登録系は `MasterMaintainer`
+- 主な DTO とバリデーション
+  - `CreateSaleRequest`
+  - `CreateSaleLineRequest`
+  - `SaleListItemResponse`
+  - `SaleResponse`
+  - `SaleDetailLineResponse`
+  - `SalesProductPreviewResponse`
+  - 売上日必須、得意先 ID 必須、明細 1 行以上、商品 ID 必須、数量 > 0 かつ小数 3 桁まで、単価 >= 0 かつ小数 2 桁まで
+- 履歴取得ロジックの実装方針
+  - 売上日以前で最新の `CustomerVersions` / `ProductVersions` / `TaxRates` を `ValidFrom` 降順で取得し、売上登録時の `CustomerVersionId` / `ProductVersionId` を保存
+  - 販売停止中の `ProductVersion` は登録不可
+  - 一覧と詳細は売上保存時の `CustomerVersionId` / `ProductVersionId` を使って当時の名称を復元
+- 金額計算と丸めの実装方針
+  - 明細金額は `数量 × 単価` を `MidpointRounding.AwayFromZero` で小数 2 桁へ丸め
+  - 税額は `明細金額 × 税率` を `decimal.Floor` で 1 円未満切り捨て
+  - 合計金額は各明細の `明細金額 + 税額` の合計
+- 実行した確認コマンド
+  - `dotnet test backend/SalesSystem.slnx`
+- Oracle 対応で後続確認が必要な点
+  - 売上一覧の絞り込みと履歴取得は SQLite で確認済みだが、Oracle 上で実行計画とインデックス利用を確認する必要がある
+  - `decimal` 精度と丸め結果が Oracle provider でも同等になることを後続で確認する必要がある
