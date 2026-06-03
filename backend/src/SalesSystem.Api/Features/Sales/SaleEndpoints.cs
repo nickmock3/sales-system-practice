@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
 using SalesSystem.Api.Domain.Entities;
@@ -13,6 +14,9 @@ public static class SaleEndpoints
         var group = endpoints.MapGroup("/api/sales");
 
         group.MapPost("/", CreateSale)
+            .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
+
+        group.MapPost("/{saleId:long}/cancel", CancelSale)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
         group.MapGet("/", GetSales)
@@ -33,6 +37,7 @@ public static class SaleEndpoints
     private static async Task<IResult> CreateSale(
         AppDbContext dbContext,
         CreateSaleRequest request,
+        ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
         var errors = SaleValidation.ValidateCreateSale(request);
@@ -80,12 +85,15 @@ public static class SaleEndpoints
             return Results.NotFound(new { message = "対象日に適用できる税率がありません。" });
         }
 
+        var now = DateTime.UtcNow;
+        var changedBy = GetUserName(user);
+
         var sale = new Sale
         {
             SalesDate = salesDate,
             CustomerId = customer.CustomerId,
             CustomerVersionId = customer.CustomerVersion.CustomerVersionId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = now
         };
 
         decimal totalAmount = 0m;
@@ -113,6 +121,13 @@ public static class SaleEndpoints
         }
 
         sale.TotalAmount = totalAmount;
+        sale.StatusHistories.Add(new SaleStatusHistory
+        {
+            Status = SaleStatus.Active,
+            Reason = "売上登録",
+            ChangedAt = now,
+            ChangedBy = changedBy
+        });
         dbContext.Sales.Add(sale);
 
         try
@@ -130,12 +145,124 @@ public static class SaleEndpoints
         return Results.Created($"/api/sales/{sale.Id}", response);
     }
 
+    private static async Task<IResult> CancelSale(
+        AppDbContext dbContext,
+        long saleId,
+        CancelSaleRequest request,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        var errors = SaleValidation.ValidateCancelSale(request);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(errors);
+        }
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var sale = await dbContext.Sales
+            .Include(sale => sale.Details)
+            .FirstOrDefaultAsync(sale => sale.Id == saleId, cancellationToken);
+
+        if (sale is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.NotFound(new { message = "売上が見つかりません。" });
+        }
+
+        var latestStatus = await LoadLatestStatusAsync(dbContext, saleId, cancellationToken);
+        if (latestStatus?.Status == SaleStatus.Canceled)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "既に取消済みの売上は取り消せません。" });
+        }
+
+        var isCorrectionSale = await dbContext.SaleCorrections
+            .AnyAsync(correction => correction.CorrectionSaleId == saleId, cancellationToken);
+        if (isCorrectionSale)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "取消売上は取り消せません。" });
+        }
+
+        var now = DateTime.UtcNow;
+        var changedBy = GetUserName(user);
+        var reason = request.Reason!.Trim();
+
+        dbContext.SaleStatusHistories.Add(new SaleStatusHistory
+        {
+            SaleId = sale.Id,
+            Status = SaleStatus.Canceled,
+            Reason = reason,
+            ChangedAt = now,
+            ChangedBy = changedBy
+        });
+
+        var cancellationSale = new Sale
+        {
+            SalesDate = sale.SalesDate,
+            CustomerId = sale.CustomerId,
+            CustomerVersionId = sale.CustomerVersionId,
+            TotalAmount = -sale.TotalAmount,
+            CreatedAt = now
+        };
+
+        foreach (var detail in sale.Details.OrderBy(detail => detail.Id))
+        {
+            cancellationSale.Details.Add(new SaleDetail
+            {
+                ProductId = detail.ProductId,
+                ProductVersionId = detail.ProductVersionId,
+                Quantity = -detail.Quantity,
+                UnitPrice = detail.UnitPrice,
+                TaxRate = detail.TaxRate,
+                TaxAmount = -detail.TaxAmount,
+                Amount = -detail.Amount
+            });
+        }
+
+        cancellationSale.StatusHistories.Add(new SaleStatusHistory
+        {
+            Status = SaleStatus.Active,
+            Reason = reason,
+            ChangedAt = now,
+            ChangedBy = changedBy
+        });
+
+        dbContext.Sales.Add(cancellationSale);
+        dbContext.SaleCorrections.Add(new SaleCorrection
+        {
+            OriginalSaleId = sale.Id,
+            CorrectionSale = cancellationSale,
+            CorrectionType = SaleCorrectionType.Cancellation,
+            Reason = reason,
+            CreatedAt = now,
+            CreatedBy = changedBy
+        });
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "売上の取消に失敗しました。" });
+        }
+
+        var response = await BuildSaleResponse(dbContext, sale.Id, cancellationToken);
+        return Results.Ok(response);
+    }
+
     private static async Task<IResult> GetSales(
         AppDbContext dbContext,
         DateTime? salesDateFrom,
         DateTime? salesDateTo,
         long? customerId,
         string? customerCode,
+        bool? includeCanceled,
+        bool? includeCorrections,
         CancellationToken cancellationToken)
     {
         var query =
@@ -177,19 +304,50 @@ public static class SaleEndpoints
             query = query.Where(item => item.customer.CustomerCode.Contains(customerCode));
         }
 
-        var sales = await query
+        var rows = await query
             .OrderByDescending(item => item.sale.SalesDate)
             .ThenByDescending(item => item.sale.Id)
-            .Select(item => new SaleListItemResponse(
-                item.sale.Id,
-                item.sale.SalesDate,
-                item.customer.Id,
-                item.customer.CustomerCode,
-                item.customerVersion.Id,
-                item.customerVersion.Name,
-                item.sale.TotalAmount,
-                item.sale.CreatedAt))
             .ToListAsync(cancellationToken);
+
+        var saleIds = rows.Select(item => item.sale.Id).ToList();
+        var latestStatuses = await LoadLatestStatusesAsync(dbContext, saleIds, cancellationToken);
+        var corrections = await dbContext.SaleCorrections
+            .AsNoTracking()
+            .Where(correction => saleIds.Contains(correction.CorrectionSaleId)
+                || saleIds.Contains(correction.OriginalSaleId))
+            .ToListAsync(cancellationToken);
+        var correctionsByCorrectionSaleId = corrections.ToDictionary(correction => correction.CorrectionSaleId);
+        var correctionsByOriginalSaleId = corrections
+            .GroupBy(correction => correction.OriginalSaleId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var sales = rows
+            .Where(item => latestStatuses.TryGetValue(item.sale.Id, out var status)
+                && (includeCanceled == true || status.Status == SaleStatus.Active)
+                && (includeCorrections == true || !correctionsByCorrectionSaleId.ContainsKey(item.sale.Id)))
+            .Select(item =>
+            {
+                var status = latestStatuses[item.sale.Id];
+                correctionsByCorrectionSaleId.TryGetValue(item.sale.Id, out var inboundCorrection);
+                correctionsByOriginalSaleId.TryGetValue(item.sale.Id, out var outboundCorrection);
+                var correction = inboundCorrection ?? outboundCorrection;
+                return new SaleListItemResponse(
+                    item.sale.Id,
+                    item.sale.SalesDate,
+                    item.customer.Id,
+                    item.customer.CustomerCode,
+                    item.customerVersion.Id,
+                    item.customerVersion.Name,
+                    item.sale.TotalAmount,
+                    item.sale.CreatedAt,
+                    status.Status.ToString(),
+                    status.ChangedAt,
+                    correction?.CorrectionType.ToString(),
+                    inboundCorrection?.OriginalSaleId,
+                    correction?.CorrectionSaleId,
+                    correction?.Reason);
+            })
+            .ToList();
 
         return Results.Ok(sales);
     }
@@ -386,6 +544,28 @@ public static class SaleEndpoints
                 detail.Amount))
             .ToListAsync(cancellationToken);
 
+        var latestStatus = await LoadLatestStatusAsync(dbContext, saleId, cancellationToken);
+        var statusHistories = await dbContext.SaleStatusHistories
+            .AsNoTracking()
+            .Where(history => history.SaleId == saleId)
+            .OrderBy(history => history.ChangedAt)
+            .ThenBy(history => history.Id)
+            .Select(history => new SaleStatusHistoryResponse(
+                history.Id,
+                history.Status.ToString(),
+                history.Reason,
+                history.ChangedAt,
+                history.ChangedBy))
+            .ToListAsync(cancellationToken);
+
+        var correction = await dbContext.SaleCorrections
+            .AsNoTracking()
+            .Where(correction => correction.CorrectionSaleId == saleId
+                || correction.OriginalSaleId == saleId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        long? originalSaleId = correction?.CorrectionSaleId == saleId ? correction.OriginalSaleId : null;
+
         return new SaleResponse(
             header.Id,
             header.SalesDate,
@@ -395,7 +575,50 @@ public static class SaleEndpoints
             header.CustomerName,
             header.TotalAmount,
             header.CreatedAt,
+            latestStatus?.Status.ToString() ?? SaleStatus.Active.ToString(),
+            latestStatus?.ChangedAt ?? header.CreatedAt,
+            correction?.CorrectionType.ToString(),
+            originalSaleId,
+            correction?.CorrectionSaleId,
+            correction?.Reason,
+            correction?.CreatedBy,
+            statusHistories,
             details);
+    }
+
+    private static async Task<SaleStatusHistory?> LoadLatestStatusAsync(
+        AppDbContext dbContext,
+        long saleId,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.SaleStatusHistories
+            .AsNoTracking()
+            .Where(history => history.SaleId == saleId)
+            .OrderByDescending(history => history.ChangedAt)
+            .ThenByDescending(history => history.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task<Dictionary<long, SaleStatusHistory>> LoadLatestStatusesAsync(
+        AppDbContext dbContext,
+        List<long> saleIds,
+        CancellationToken cancellationToken)
+    {
+        var histories = await dbContext.SaleStatusHistories
+            .AsNoTracking()
+            .Where(history => saleIds.Contains(history.SaleId))
+            .OrderByDescending(history => history.ChangedAt)
+            .ThenByDescending(history => history.Id)
+            .ToListAsync(cancellationToken);
+
+        return histories
+            .GroupBy(history => history.SaleId)
+            .ToDictionary(group => group.Key, group => group.First());
+    }
+
+    private static string GetUserName(ClaimsPrincipal user)
+    {
+        return user.Identity?.Name?.Trim() is { Length: > 0 } name ? name : "unknown";
     }
 
     private sealed record CustomerVersionSnapshot(

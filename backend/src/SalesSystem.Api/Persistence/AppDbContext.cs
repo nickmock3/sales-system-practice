@@ -19,6 +19,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<SaleDetail> SaleDetails => Set<SaleDetail>();
 
+    public DbSet<SaleStatusHistory> SaleStatusHistories => Set<SaleStatusHistory>();
+
+    public DbSet<SaleCorrection> SaleCorrections => Set<SaleCorrection>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Product>(entity =>
@@ -158,6 +162,63 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasPrincipalKey(version => new { version.Id, version.ProductId })
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("FK_SALE_DETAILS_PRODUCT_VERSIONS");
+        });
+
+        modelBuilder.Entity<SaleStatusHistory>(entity =>
+        {
+            entity.ToTable("SALE_STATUS_HISTORIES");
+            entity.HasKey(history => history.Id).HasName("PK_SALE_STATUS_HISTORIES");
+            entity.Property(history => history.Id).HasColumnName("ID");
+            entity.Property(history => history.SaleId).HasColumnName("SALE_ID");
+            entity.Property(history => history.Status)
+                .HasColumnName("STATUS")
+                .HasConversion<string>()
+                .HasMaxLength(30)
+                .IsRequired();
+            entity.Property(history => history.Reason).HasColumnName("REASON").HasMaxLength(300).IsRequired();
+            entity.Property(history => history.ChangedAt).HasColumnName("CHANGED_AT").IsRequired();
+            entity.Property(history => history.ChangedBy).HasColumnName("CHANGED_BY").HasMaxLength(100).IsRequired();
+            entity.HasIndex(history => new { history.SaleId, history.ChangedAt, history.Id })
+                .HasDatabaseName("IX_SALE_STATUS_HISTORIES_SALE_CHANGED");
+            entity.HasOne(history => history.Sale)
+                .WithMany(sale => sale.StatusHistories)
+                .HasForeignKey(history => history.SaleId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_SALE_STATUS_HISTORIES_SALES");
+        });
+
+        modelBuilder.Entity<SaleCorrection>(entity =>
+        {
+            entity.ToTable("SALE_CORRECTIONS");
+            entity.HasKey(correction => correction.Id).HasName("PK_SALE_CORRECTIONS");
+            entity.Property(correction => correction.Id).HasColumnName("ID");
+            entity.Property(correction => correction.OriginalSaleId).HasColumnName("ORIGINAL_SALE_ID");
+            entity.Property(correction => correction.CorrectionSaleId).HasColumnName("CORRECTION_SALE_ID");
+            entity.Property(correction => correction.CorrectionType)
+                .HasColumnName("CORRECTION_TYPE")
+                .HasConversion<string>()
+                .HasMaxLength(30)
+                .IsRequired();
+            entity.Property(correction => correction.Reason).HasColumnName("REASON").HasMaxLength(300).IsRequired();
+            entity.Property(correction => correction.CreatedAt).HasColumnName("CREATED_AT").IsRequired();
+            entity.Property(correction => correction.CreatedBy).HasColumnName("CREATED_BY").HasMaxLength(100).IsRequired();
+            entity.HasIndex(correction => correction.OriginalSaleId).HasDatabaseName("IX_SALE_CORRECTIONS_ORIGINAL_SALE_ID");
+            entity.HasIndex(correction => new { correction.OriginalSaleId, correction.CorrectionType })
+                .IsUnique()
+                .HasDatabaseName("UX_SALE_CORRECTIONS_ORIGINAL_TYPE");
+            entity.HasIndex(correction => correction.CorrectionSaleId)
+                .IsUnique()
+                .HasDatabaseName("UX_SALE_CORRECTIONS_CORRECTION_SALE_ID");
+            entity.HasOne(correction => correction.OriginalSale)
+                .WithMany()
+                .HasForeignKey(correction => correction.OriginalSaleId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_SALE_CORRECTIONS_ORIGINAL_SALES");
+            entity.HasOne(correction => correction.CorrectionSale)
+                .WithMany()
+                .HasForeignKey(correction => correction.CorrectionSaleId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_SALE_CORRECTIONS_CORRECTION_SALES");
         });
     }
 }

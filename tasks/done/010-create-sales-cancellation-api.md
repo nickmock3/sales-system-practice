@@ -131,3 +131,68 @@
 - 一覧・詳細での最新状態導出と訂正関係表示方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+### 追加・変更したエンドポイント
+
+- `POST /api/sales/{saleId}/cancel` を追加した。
+- `GET /api/sales` に `includeCanceled` と `includeCorrections` クエリを追加した。
+- `GET /api/sales` と `GET /api/sales/{saleId}` のレスポンスに最新状態、状態変更日時、訂正関係情報を追加した。
+- 取消済み元売上側でも、訂正種別、取消売上 ID、訂正理由を返すようにした。
+
+### 追加した DB テーブルとマイグレーション
+
+- `SALE_STATUS_HISTORIES` を追加した。
+  - `SALE_ID`, `STATUS`, `REASON`, `CHANGED_AT`, `CHANGED_BY`
+- `SALE_CORRECTIONS` を追加した。
+  - `ORIGINAL_SALE_ID`, `CORRECTION_SALE_ID`, `CORRECTION_TYPE`, `REASON`, `CREATED_AT`, `CREATED_BY`
+- マイグレーション `20260603010000_AddSaleCancellation` を追加した。
+- 既存 `SALES` にはマイグレーション時に `Active` の初期状態履歴を追加する。
+
+### 設定した認可要件
+
+- 売上取消 API は `MasterMaintainer` ポリシーを要求する。
+- 売上一覧、売上詳細、プレビュー系 API は従来通り `AuthenticatedUser` ポリシーを要求する。
+
+### 主な DTO とバリデーション
+
+- `CancelSaleRequest` を追加し、取消理由を受け取るようにした。
+- `SaleListItemResponse` に `Status`, `StatusChangedAt`, `CorrectionType`, `OriginalSaleId`, `CorrectionReason` を追加した。
+- `SaleListItemResponse` に `CorrectionSaleId` を追加した。
+- `SaleResponse` に最新状態、状態履歴、訂正種別、元売上 ID、取消売上 ID、訂正理由、実行者を追加した。
+- 取消理由は必須とし、前後空白を除いた後に空文字の場合はバリデーションエラーにする。
+- 取消理由は 300 文字以内に制限した。
+
+### 取消ロジックの実装方針
+
+- 取消処理はトランザクション内で実行する。
+- 元売上ヘッダーと明細は更新せず、元売上には `Canceled` の状態履歴だけを追加する。
+- 取消売上は元売上の保存済み `CustomerVersionId`, `ProductVersionId`, `UnitPrice`, `TaxRate` をそのまま使い、数量、明細金額、税額、合計金額だけを逆符号で保存する。
+- 取消時に商品マスタ、得意先マスタ、税率は再取得しない。
+- 取消売上には `Active` の状態履歴を追加する。
+- 元売上と取消売上の関係は `SALE_CORRECTIONS` に `CorrectionType = Cancellation` で保存する。
+- 既に取消済みの売上と取消売上自体は取り消せないようにした。
+- `ORIGINAL_SALE_ID` と `CORRECTION_TYPE` の一意制約で、同じ元売上に同じ訂正種別を二重登録できないようにした。
+
+### 一覧・詳細での最新状態導出と訂正関係表示方針
+
+- 現在状態は `SALE_STATUS_HISTORIES` の `ChangedAt`, `Id` 降順の最新行から導出する。
+- 一覧の初期表示は、最新状態が `Active` で、かつ `SALE_CORRECTIONS.CORRECTION_SALE_ID` に存在しない通常売上だけを返す。
+- `includeCanceled=true` で取消済み元売上を含める。
+- `includeCorrections=true` で取消売上を含める。
+- 詳細は状態履歴を古い順に返し、取消売上の場合は元売上 ID と訂正情報を返す。
+- 詳細は取消済み元売上の場合も取消売上 ID と訂正情報を返す。
+
+### 実行した確認コマンド
+
+- `dotnet build backend/SalesSystem.slnx`
+- `dotnet test backend/SalesSystem.slnx`
+  - 61 件成功。
+
+### Oracle 対応で後続確認が必要な点
+
+- `STATUS` と `CORRECTION_TYPE` は enum を文字列変換して保存しているため、Oracle provider で列型・長さが想定通りになるか確認する。
+- `SALE_STATUS_HISTORIES` の最新状態取得で使う `ChangedAt`, `Id` 降順の並びと索引が Oracle 上でも実行計画上問題ないか確認する。
+- `SALE_CORRECTIONS.CORRECTION_SALE_ID` の一意索引、2 本の自己参照外部キー、`DeleteBehavior.Restrict` が Oracle マイグレーションで意図通り生成されるか確認する。
+- `SALE_CORRECTIONS.ORIGINAL_SALE_ID + CORRECTION_TYPE` の一意索引が Oracle マイグレーションで意図通り生成されるか確認する。

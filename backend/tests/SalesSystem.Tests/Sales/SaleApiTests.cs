@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SalesSystem.Api.Auth;
+using SalesSystem.Api.Domain.Entities;
 using SalesSystem.Api.Features.Customers;
 using SalesSystem.Api.Features.Products;
 using SalesSystem.Api.Features.Sales;
@@ -94,6 +96,227 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal("CUST001", item.CustomerCode);
         Assert.Equal("最新得意先", item.CustomerName);
         Assert.Equal(238.16m, item.TotalAmount);
+        Assert.Equal(nameof(SaleStatus.Active), item.Status);
+    }
+
+    [Fact]
+    public async Task CreateSale_AddsActiveStatusHistory()
+    {
+        // 売上登録時に Active の状態履歴が追加されることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var sale = await CreateBasicSaleAsync(client);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var history = Assert.Single(dbContext.SaleStatusHistories.Where(history => history.SaleId == sale.SaleId));
+
+        Assert.Equal(SaleStatus.Active, history.Status);
+        Assert.Equal("売上登録", history.Reason);
+        Assert.Equal("master1", history.ChangedBy);
+    }
+
+    [Fact]
+    public async Task CancelSale_WithActiveSale_CreatesCancellationTransaction()
+    {
+        // 登録済み売上を取り消すと元売上の状態履歴と逆符号の取消売上が保存されることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var sale = await CreateBasicSaleAsync(client);
+
+        using var response = await client.PostAsJsonAsync($"/api/sales/{sale.SaleId}/cancel", new
+        {
+            reason = "数量を誤って登録したため"
+        });
+        var canceled = await response.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(canceled);
+        Assert.Equal(nameof(SaleStatus.Canceled), canceled.Status);
+        Assert.Equal(2, canceled.StatusHistories.Count);
+        Assert.Contains(canceled.StatusHistories, history => history.Status == nameof(SaleStatus.Canceled)
+            && history.Reason == "数量を誤って登録したため"
+            && history.ChangedBy == "master1");
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var correction = Assert.Single(dbContext.SaleCorrections);
+        var cancellationSale = await dbContext.Sales
+            .Include(item => item.Details)
+            .SingleAsync(item => item.Id == correction.CorrectionSaleId);
+        var originalDetail = await dbContext.SaleDetails.SingleAsync(detail => detail.SaleId == sale.SaleId);
+        var cancellationDetail = Assert.Single(cancellationSale.Details);
+
+        Assert.Equal(sale.SaleId, correction.OriginalSaleId);
+        Assert.Equal(SaleCorrectionType.Cancellation, correction.CorrectionType);
+        Assert.Equal("数量を誤って登録したため", correction.Reason);
+        Assert.Equal("master1", correction.CreatedBy);
+        Assert.Equal(-sale.TotalAmount, cancellationSale.TotalAmount);
+        Assert.Equal(-originalDetail.Quantity, cancellationDetail.Quantity);
+        Assert.Equal(originalDetail.UnitPrice, cancellationDetail.UnitPrice);
+        Assert.Equal(originalDetail.TaxRate, cancellationDetail.TaxRate);
+        Assert.Equal(-originalDetail.TaxAmount, cancellationDetail.TaxAmount);
+        Assert.Equal(-originalDetail.Amount, cancellationDetail.Amount);
+
+        using var detailResponse = await client.GetAsync($"/api/sales/{sale.SaleId}");
+        var originalDetailResponse = await detailResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        Assert.NotNull(originalDetailResponse);
+        Assert.Equal(nameof(SaleCorrectionType.Cancellation), originalDetailResponse.CorrectionType);
+        Assert.Null(originalDetailResponse.OriginalSaleId);
+        Assert.Equal(correction.CorrectionSaleId, originalDetailResponse.CorrectionSaleId);
+        Assert.Equal("数量を誤って登録したため", originalDetailResponse.CorrectionReason);
+    }
+
+    [Fact]
+    public async Task CancelSale_WithAlreadyCanceledOrCancellationSale_ReturnsConflict()
+    {
+        // 取消済み売上と取消売上自体は再度取り消せないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var sale = await CreateBasicSaleAsync(client);
+        using var cancelResponse = await client.PostAsJsonAsync($"/api/sales/{sale.SaleId}/cancel", new
+        {
+            reason = "取消理由"
+        });
+        cancelResponse.EnsureSuccessStatusCode();
+
+        using var secondCancelResponse = await client.PostAsJsonAsync($"/api/sales/{sale.SaleId}/cancel", new
+        {
+            reason = "再取消"
+        });
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var correctionSaleId = dbContext.SaleCorrections.Single().CorrectionSaleId;
+
+        using var cancelCorrectionResponse = await client.PostAsJsonAsync($"/api/sales/{correctionSaleId}/cancel", new
+        {
+            reason = "取消売上を取消"
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, secondCancelResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, cancelCorrectionResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task SaleCorrections_WithSameOriginalAndType_IsRejected()
+    {
+        // 同じ元売上に同じ訂正種別を二重登録できないことを DB 制約で確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var sale = await CreateBasicSaleAsync(client);
+        using var cancelResponse = await client.PostAsJsonAsync($"/api/sales/{sale.SaleId}/cancel", new
+        {
+            reason = "取消理由"
+        });
+        cancelResponse.EnsureSuccessStatusCode();
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var originalSale = await dbContext.Sales.AsNoTracking().SingleAsync(item => item.Id == sale.SaleId);
+        var duplicateCancellationSale = new Sale
+        {
+            SalesDate = originalSale.SalesDate,
+            CustomerId = originalSale.CustomerId,
+            CustomerVersionId = originalSale.CustomerVersionId,
+            TotalAmount = -originalSale.TotalAmount,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        dbContext.Sales.Add(duplicateCancellationSale);
+        dbContext.SaleCorrections.Add(new SaleCorrection
+        {
+            OriginalSaleId = sale.SaleId,
+            CorrectionSale = duplicateCancellationSale,
+            CorrectionType = SaleCorrectionType.Cancellation,
+            Reason = "重複取消",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = "test"
+        });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => dbContext.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task CancelSale_WithBlankReason_ReturnsValidationProblem()
+    {
+        // 取消理由が空白だけの場合はバリデーションエラーになることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var sale = await CreateBasicSaleAsync(client);
+
+        using var response = await client.PostAsJsonAsync($"/api/sales/{sale.SaleId}/cancel", new
+        {
+            reason = "   "
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetSales_DefaultExcludesCanceledAndCorrectionSales()
+    {
+        // 売上一覧の初期表示では有効な通常売上だけが返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var canceledSale = await CreateBasicSaleAsync(client, "CUST001", "P001");
+        var activeSale = await CreateBasicSaleAsync(client, "CUST002", "P002");
+        using var cancelResponse = await client.PostAsJsonAsync($"/api/sales/{canceledSale.SaleId}/cancel", new
+        {
+            reason = "一覧確認用"
+        });
+        cancelResponse.EnsureSuccessStatusCode();
+
+        using var defaultResponse = await client.GetAsync("/api/sales");
+        var defaultList = await defaultResponse.Content.ReadFromJsonAsync<List<SaleListItemResponse>>();
+
+        using var auditResponse = await client.GetAsync("/api/sales?includeCanceled=true&includeCorrections=true");
+        var auditList = await auditResponse.Content.ReadFromJsonAsync<List<SaleListItemResponse>>();
+
+        Assert.Equal(HttpStatusCode.OK, defaultResponse.StatusCode);
+        var item = Assert.Single(defaultList!);
+        Assert.Equal(activeSale.SaleId, item.SaleId);
+        Assert.Equal(nameof(SaleStatus.Active), item.Status);
+
+        Assert.Equal(HttpStatusCode.OK, auditResponse.StatusCode);
+        Assert.NotNull(auditList);
+        Assert.Equal(3, auditList.Count);
+        Assert.Contains(auditList, item => item.SaleId == canceledSale.SaleId
+            && item.Status == nameof(SaleStatus.Canceled)
+            && item.CorrectionType == nameof(SaleCorrectionType.Cancellation)
+            && item.CorrectionSaleId is not null);
+        Assert.Contains(auditList, item => item.OriginalSaleId == canceledSale.SaleId && item.CorrectionType == nameof(SaleCorrectionType.Cancellation));
+    }
+
+    [Fact]
+    public async Task CancelSaleAuthorization_RequiresMasterMaintainer()
+    {
+        // 売上取消 API は認証済みかつ MasterMaintainer ロールが必要であることを確認する。
+        await ResetDatabaseAsync();
+        using var anonymousClient = _factory.CreateClient();
+        using var unauthorizedResponse = await anonymousClient.PostAsJsonAsync("/api/sales/1/cancel", new
+        {
+            reason = "取消理由"
+        });
+
+        using var userClient = _factory.CreateClient();
+        userClient.SetDummyUser("user1");
+        using var forbiddenResponse = await userClient.PostAsJsonAsync("/api/sales/1/cancel", new
+        {
+            reason = "取消理由"
+        });
+
+        using var masterClient = CreateMasterMaintainerClient();
+        using var notFoundResponse = await masterClient.PostAsJsonAsync("/api/sales/999/cancel", new
+        {
+            reason = "取消理由"
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorizedResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, forbiddenResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, notFoundResponse.StatusCode);
     }
 
     [Fact]
@@ -342,6 +565,35 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         });
 
         response.EnsureSuccessStatusCode();
+    }
+
+    private async Task<SaleResponse> CreateBasicSaleAsync(
+        HttpClient client,
+        string customerCode = "CUST001",
+        string productCode = "P001")
+    {
+        var customerId = await CreateCustomerHistoryAsync(client, customerCode, $"得意先{customerCode}", "2026-01-01");
+        var taxCategory = $"STANDARD-{productCode}";
+        var productId = await CreateProductHistoryAsync(client, productCode, $"商品{productCode}", 100.00m, taxCategory, false, "2026-01-01");
+        await CreateTaxRateAsync(client, taxCategory, 0.10m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 2m,
+                    unitPrice = 100.00m
+                }
+            }
+        });
+
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<SaleResponse>())!;
     }
 
     private async Task ResetDatabaseAsync()

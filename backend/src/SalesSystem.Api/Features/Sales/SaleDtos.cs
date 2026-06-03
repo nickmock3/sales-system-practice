@@ -18,7 +18,13 @@ public sealed record SaleListItemResponse(
     long CustomerVersionId,
     string CustomerName,
     decimal TotalAmount,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string Status,
+    DateTime StatusChangedAt,
+    string? CorrectionType,
+    long? OriginalSaleId,
+    long? CorrectionSaleId,
+    string? CorrectionReason);
 
 public sealed record SaleDetailLineResponse(
     long SaleDetailId,
@@ -42,7 +48,24 @@ public sealed record SaleResponse(
     string CustomerName,
     decimal TotalAmount,
     DateTime CreatedAt,
+    string Status,
+    DateTime StatusChangedAt,
+    string? CorrectionType,
+    long? OriginalSaleId,
+    long? CorrectionSaleId,
+    string? CorrectionReason,
+    string? CorrectionCreatedBy,
+    List<SaleStatusHistoryResponse> StatusHistories,
     List<SaleDetailLineResponse> Details);
+
+public sealed record SaleStatusHistoryResponse(
+    long SaleStatusHistoryId,
+    string Status,
+    string Reason,
+    DateTime ChangedAt,
+    string ChangedBy);
+
+public sealed record CancelSaleRequest(string? Reason);
 
 public sealed record SalesProductPreviewResponse(
     long ProductId,

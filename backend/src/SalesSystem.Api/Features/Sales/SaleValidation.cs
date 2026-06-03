@@ -31,6 +31,22 @@ internal static class SaleValidation
         return errors;
     }
 
+    public static Dictionary<string, string[]> ValidateCancelSale(CancelSaleRequest request)
+    {
+        var errors = new Dictionary<string, string[]>();
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            errors[nameof(request.Reason)] = ["取消理由は必須です。"];
+        }
+        else if (request.Reason.Trim().Length > 300)
+        {
+            errors[nameof(request.Reason)] = ["取消理由は300文字以内で指定してください。"];
+        }
+
+        return errors;
+    }
+
     private static void ValidateLine(
         Dictionary<string, string[]> errors,
         CreateSaleLineRequest line,

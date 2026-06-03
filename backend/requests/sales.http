@@ -6,6 +6,10 @@
 GET {{baseUrl}}/api/sales?salesDateFrom=2026-04-01&salesDateTo=2026-04-30&customerCode=CUST001
 X-Dummy-User: {{user}}
 
+### 売上一覧(監査用: 取消済み・取消売上を含む)
+GET {{baseUrl}}/api/sales?includeCanceled=true&includeCorrections=true
+X-Dummy-User: {{user}}
+
 ### 売上詳細
 GET {{baseUrl}}/api/sales/1
 X-Dummy-User: {{user}}
@@ -34,4 +38,14 @@ X-Dummy-Roles: {{roles}}
       "unitPrice": 100.01
     }
   ]
+}
+
+### 売上取消
+POST {{baseUrl}}/api/sales/1/cancel
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "reason": "数量を誤って登録したため"
 }

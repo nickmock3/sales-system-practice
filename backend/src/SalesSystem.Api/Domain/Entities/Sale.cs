@@ -19,4 +19,6 @@ public sealed class Sale
     public DateTime CreatedAt { get; set; }
 
     public List<SaleDetail> Details { get; set; } = [];
+
+    public List<SaleStatusHistory> StatusHistories { get; set; } = [];
 }
