@@ -15,6 +15,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
 
     public DbSet<TaxRate> TaxRates => Set<TaxRate>();
 
+    public DbSet<CustomerProductPrice> CustomerProductPrices => Set<CustomerProductPrice>();
+
     public DbSet<Sale> Sales => Set<Sale>();
 
     public DbSet<SaleDetail> SaleDetails => Set<SaleDetail>();
@@ -106,6 +108,32 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasDatabaseName("UX_TAX_RATES_TAX_CATEGORY_VALID_FROM");
         });
 
+        modelBuilder.Entity<CustomerProductPrice>(entity =>
+        {
+            entity.ToTable("CUSTOMER_PRODUCT_PRICES");
+            entity.HasKey(price => price.Id).HasName("PK_CUSTOMER_PRODUCT_PRICES");
+            entity.Property(price => price.Id).HasColumnName("ID");
+            entity.Property(price => price.CustomerId).HasColumnName("CUSTOMER_ID");
+            entity.Property(price => price.ProductId).HasColumnName("PRODUCT_ID");
+            entity.Property(price => price.UnitPrice).HasColumnName("UNIT_PRICE").HasPrecision(18, 2);
+            entity.Property(price => price.ValidFrom).HasColumnName("VALID_FROM").IsRequired();
+            entity.Property(price => price.CreatedAt).HasColumnName("CREATED_AT").IsRequired();
+            entity.HasIndex(price => new { price.CustomerId, price.ProductId, price.ValidFrom })
+                .IsUnique()
+                .HasDatabaseName("UX_CUSTOMER_PRODUCT_PRICES_CUSTOMER_PRODUCT_VALID_FROM");
+            entity.HasIndex(price => price.ProductId).HasDatabaseName("IX_CUSTOMER_PRODUCT_PRICES_PRODUCT_ID");
+            entity.HasOne(price => price.Customer)
+                .WithMany()
+                .HasForeignKey(price => price.CustomerId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_CUSTOMER_PRODUCT_PRICES_CUSTOMERS");
+            entity.HasOne(price => price.Product)
+                .WithMany()
+                .HasForeignKey(price => price.ProductId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_CUSTOMER_PRODUCT_PRICES_PRODUCTS");
+        });
+
         modelBuilder.Entity<Sale>(entity =>
         {
             entity.ToTable("SALES");
@@ -146,6 +174,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(detail => detail.AccountingCategory).HasColumnName("ACCOUNTING_CATEGORY").HasMaxLength(50).IsRequired();
             entity.Property(detail => detail.Quantity).HasColumnName("QUANTITY").HasPrecision(18, 3);
             entity.Property(detail => detail.UnitPrice).HasColumnName("UNIT_PRICE").HasPrecision(18, 2);
+            entity.Property(detail => detail.CustomerProductPriceId).HasColumnName("CUSTOMER_PRODUCT_PRICE_ID");
+            entity.Property(detail => detail.IsManualUnitPrice).HasColumnName("IS_MANUAL_UNIT_PRICE").IsRequired();
+            entity.Property(detail => detail.AutoUnitPrice).HasColumnName("AUTO_UNIT_PRICE").HasPrecision(18, 2);
+            entity.Property(detail => detail.ManualUnitPriceReason).HasColumnName("MANUAL_UNIT_PRICE_REASON").HasMaxLength(300);
             entity.Property(detail => detail.TaxRate).HasColumnName("TAX_RATE").HasPrecision(5, 4);
             entity.Property(detail => detail.TaxAmount).HasColumnName("TAX_AMOUNT").HasPrecision(18, 2);
             entity.Property(detail => detail.Amount).HasColumnName("AMOUNT").HasPrecision(18, 2);
@@ -153,6 +185,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasIndex(detail => detail.ProductId).HasDatabaseName("IX_SALE_DETAILS_PRODUCT_ID");
             entity.HasIndex(detail => detail.ProductVersionId).HasDatabaseName("IX_SALE_DETAILS_PRODUCT_VERSION_ID");
             entity.HasIndex(detail => detail.TaxRateId).HasDatabaseName("IX_SALE_DETAILS_TAX_RATE_ID");
+            entity.HasIndex(detail => detail.CustomerProductPriceId).HasDatabaseName("IX_SALE_DETAILS_CUSTOMER_PRODUCT_PRICE_ID");
             entity.HasOne(detail => detail.Sale)
                 .WithMany(sale => sale.Details)
                 .HasForeignKey(detail => detail.SaleId)
@@ -174,6 +207,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasForeignKey(detail => detail.TaxRateId)
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("FK_SALE_DETAILS_TAX_RATES");
+            entity.HasOne(detail => detail.CustomerProductPrice)
+                .WithMany()
+                .HasForeignKey(detail => detail.CustomerProductPriceId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_SALE_DETAILS_CUSTOMER_PRODUCT_PRICES");
         });
 
         modelBuilder.Entity<SaleStatusHistory>(entity =>

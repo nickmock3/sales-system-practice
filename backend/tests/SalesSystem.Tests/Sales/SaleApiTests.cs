@@ -87,6 +87,9 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal("STANDARD", detail.Details[0].TaxCategory);
         Assert.Equal("標準税率", detail.Details[0].TaxCategoryName);
         Assert.Equal("TAXABLE_STANDARD", detail.Details[0].AccountingCategory);
+        Assert.Null(detail.Details[0].CustomerProductPriceId);
+        Assert.False(detail.Details[0].IsManualUnitPrice);
+        Assert.Equal(100.01m, detail.Details[0].AutoUnitPrice);
         Assert.Equal(0.10m, detail.Details[0].TaxRate);
         Assert.Equal(10.00m, detail.Details[0].TaxAmount);
         Assert.Equal(100.51m, detail.Details[0].Amount);
@@ -459,6 +462,211 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
     }
 
     [Fact]
+    public async Task PreviewSalesLine_WithCustomerProductPrice_ReturnsCustomerPriceAndTaxSnapshot()
+    {
+        // 得意先別商品単価がある場合、売上入力補助 API がその単価と税区分情報を返すことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+        var customerProductPriceId = await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
+
+        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        var preview = await response.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(preview);
+        Assert.Equal(productId, preview.ProductId);
+        Assert.Equal("P001", preview.ProductCode);
+        Assert.Equal("商品A", preview.Name);
+        Assert.Equal("箱", preview.Unit);
+        Assert.Equal(80.00m, preview.AutoUnitPrice);
+        Assert.Equal(customerProductPriceId, preview.CustomerProductPriceId);
+        Assert.Equal("STANDARD", preview.TaxCategory);
+        Assert.Equal("標準税率", preview.TaxCategoryName);
+        Assert.Equal(0.10m, preview.TaxRate);
+        Assert.True(preview.TaxRateId > 0);
+        Assert.False(preview.IsDiscontinued);
+        Assert.Equal(new DateTime(2026, 1, 1), preview.ProductVersionValidFrom);
+    }
+
+    [Fact]
+    public async Task PreviewSalesLine_WithoutCustomerProductPrice_ReturnsStandardUnitPrice()
+    {
+        // 得意先別商品単価がない場合、売上入力補助 API が商品標準単価へフォールバックすることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 120.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        var preview = await response.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(preview);
+        Assert.Equal(120.00m, preview.AutoUnitPrice);
+        Assert.Null(preview.CustomerProductPriceId);
+        Assert.Equal("STANDARD", preview.TaxCategory);
+        Assert.Equal("標準税率", preview.TaxCategoryName);
+        Assert.Equal(0.10m, preview.TaxRate);
+    }
+
+    [Fact]
+    public async Task CreateSale_UsesSameAutoUnitPriceAsPreviewSalesLine()
+    {
+        // 売上登録 API と売上入力補助 API で同じ自動取得単価と税区分が使われることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+        var customerProductPriceId = await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
+
+        using var previewResponse = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        var preview = await previewResponse.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
+
+        using var createResponse = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 2m,
+                    unitPrice = preview!.AutoUnitPrice
+                }
+            }
+        });
+        var created = await createResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, previewResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        Assert.NotNull(created);
+        var detail = Assert.Single(created.Details);
+        Assert.Equal(preview!.AutoUnitPrice, detail.UnitPrice);
+        Assert.Equal(preview.AutoUnitPrice, detail.AutoUnitPrice);
+        Assert.Equal(customerProductPriceId, detail.CustomerProductPriceId);
+        Assert.False(detail.IsManualUnitPrice);
+        Assert.Equal(preview.TaxCategory, detail.TaxCategory);
+        Assert.Equal(preview.TaxCategoryName, detail.TaxCategoryName);
+        Assert.Equal(preview.TaxRateId, detail.TaxRateId);
+        Assert.Equal(176.00m, created.TotalAmount);
+    }
+
+    [Fact]
+    public async Task CreateSale_WithManualUnitPriceReasonAndAutoUnitPrice_ReturnsValidationProblem()
+    {
+        // 単価を自動取得単価から変更していない場合、手入力変更理由を指定できないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 1m,
+                    unitPrice = 100.00m,
+                    manualUnitPriceReason = "理由だけを指定"
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateSale_WithManualUnitPriceReasonAndChangedUnitPrice_SavesReason()
+    {
+        // 単価を自動取得単価から変更した場合、手入力変更理由が保存されることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 1m,
+                    unitPrice = 90.00m,
+                    manualUnitPriceReason = "キャンペーン値引き"
+                }
+            }
+        });
+        var created = await response.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.NotNull(created);
+        var detail = Assert.Single(created.Details);
+        Assert.True(detail.IsManualUnitPrice);
+        Assert.Equal(100.00m, detail.AutoUnitPrice);
+        Assert.Equal(90.00m, detail.UnitPrice);
+        Assert.Equal("キャンペーン値引き", detail.ManualUnitPriceReason);
+    }
+
+    [Fact]
+    public async Task CreateSale_WithLongManualUnitPriceReason_ReturnsValidationProblem()
+    {
+        // 手入力変更理由が300文字を超える場合はバリデーションエラーになることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 1m,
+                    unitPrice = 90.00m,
+                    manualUnitPriceReason = new string('あ', 301)
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PreviewSalesLine_WithoutApplicableCustomerHistory_ReturnsNotFound()
+    {
+        // 対象日に得意先履歴が存在しない場合、売上入力補助 API がエラーを返すことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-05-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CreateSale_WithInvalidLinePrecision_ReturnsValidationProblem()
     {
         // 数量 3 桁超過や単価 2 桁超過はバリデーションエラーになることを確認する。
@@ -675,6 +883,29 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         {
             response.EnsureSuccessStatusCode();
         }
+    }
+
+    private async Task<long> CreateCustomerProductPriceAsync(
+        long customerId,
+        long productId,
+        decimal unitPrice,
+        string validFrom)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var price = new CustomerProductPrice
+        {
+            CustomerId = customerId,
+            ProductId = productId,
+            UnitPrice = unitPrice,
+            ValidFrom = DateTime.Parse(validFrom),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        dbContext.CustomerProductPrices.Add(price);
+        await dbContext.SaveChangesAsync();
+
+        return price.Id;
     }
 
     private async Task<SaleResponse> CreateBasicSaleAsync(

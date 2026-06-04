@@ -120,6 +120,42 @@ SaleDetails
 
 そのため、売上日変更時には選択済み明細の単価や税率を再取得するか、再取得するかどうかを確認する。
 
+## 売上入力補助 API
+
+売上入力画面で明細商品を選択したときは、`GET /api/sales/preview-sales-line` を使い、売上日・得意先・商品から登録時に採用される商品履歴、税区分、税率、自動取得単価を確認する。
+
+入力:
+
+```text
+salesDate
+customerId
+productId
+```
+
+レスポンス:
+
+```text
+ProductId
+ProductCode
+ProductVersionId
+Name
+Unit
+AutoUnitPrice
+CustomerProductPriceId nullable
+TaxCategory
+TaxCategoryName
+TaxRate
+TaxRateId
+IsDiscontinued
+ProductVersionValidFrom
+```
+
+自動取得単価は `specs/unit-prices.md` の単価採用ルールで決定する。得意先別商品単価が存在する場合は `CustomerProductPriceId` を返し、商品標準単価へフォールバックした場合は `null` を返す。
+
+対象日に適用できる得意先履歴、商品履歴、税率が存在しない場合はエラーにする。販売停止中の商品はプレビューでは `IsDiscontinued = true` として返し、売上登録 API では登録不可にする。
+
+既存の `GET /api/sales/preview-product` は、得意先別単価を考慮しない旧形式として当面残す。
+
 ## 金額計算
 
 - 明細金額は数量と単価から計算する。

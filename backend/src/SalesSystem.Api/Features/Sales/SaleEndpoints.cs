@@ -31,6 +31,9 @@ public static class SaleEndpoints
         group.MapGet("/preview-product", PreviewProduct)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
+        group.MapGet("/preview-sales-line", PreviewSalesLine)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
         return endpoints;
     }
 
@@ -58,31 +61,26 @@ public static class SaleEndpoints
             return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
         }
 
-        var productIds = lines.Select(line => line.ProductId).Distinct().ToList();
-        var latestProductVersions = await LoadLatestProductVersionsAsync(dbContext, productIds, salesDate, cancellationToken);
-        if (latestProductVersions.Count != productIds.Count)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return Results.NotFound(new { message = "対象日に適用できる商品履歴がありません。" });
-        }
+        var resolvedLines = await ResolveSalesLinesAsync(
+            dbContext,
+            customer.CustomerId,
+            lines.Select(line => line.ProductId).ToList(),
+            salesDate,
+            cancellationToken);
 
-        var discontinuedProduct = latestProductVersions.Values.FirstOrDefault(version => version.IsDiscontinued);
-        if (discontinuedProduct is not null)
+        foreach (var resolvedLine in resolvedLines)
         {
-            await transaction.RollbackAsync(cancellationToken);
-            return Results.Conflict(new { message = "販売停止中の商品は登録できません。" });
-        }
+            if (resolvedLine.ErrorMessage is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return BuildSalesLineResolutionErrorResult(resolvedLine);
+            }
 
-        var taxCategories = latestProductVersions.Values
-            .Select(version => version.TaxCategory)
-            .Distinct()
-            .ToList();
-
-        var latestTaxRates = await LoadLatestTaxRatesAsync(dbContext, taxCategories, salesDate, cancellationToken);
-        if (latestTaxRates.Count != taxCategories.Count)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return Results.NotFound(new { message = "対象日に適用できる税率がありません。" });
+            if (resolvedLine.IsDiscontinued)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.Conflict(new { message = "販売停止中の商品は登録できません。" });
+            }
         }
 
         var now = DateTime.UtcNow;
@@ -98,25 +96,43 @@ public static class SaleEndpoints
 
         decimal totalAmount = 0m;
 
-        foreach (var line in lines)
+        for (var index = 0; index < lines.Count; index++)
         {
-            var productVersion = latestProductVersions[line.ProductId];
-            var taxRate = latestTaxRates[productVersion.TaxCategory];
+            var line = lines[index];
+            var resolvedLine = resolvedLines[index];
 
             var amount = decimal.Round(line.Quantity * line.UnitPrice, 2, MidpointRounding.AwayFromZero);
-            var taxAmount = decimal.Floor(amount * taxRate.Rate);
+            var taxAmount = decimal.Floor(amount * resolvedLine.TaxRate);
+            var isManualUnitPrice = line.UnitPrice != resolvedLine.AutoUnitPrice;
+
+            if (!isManualUnitPrice && !string.IsNullOrWhiteSpace(line.ManualUnitPriceReason))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [$"Lines[{index}].{nameof(CreateSaleLineRequest.ManualUnitPriceReason)}"] = ["手入力変更理由は単価を自動取得単価から変更した場合だけ指定できます。"]
+                });
+            }
+
+            var manualReason = isManualUnitPrice && !string.IsNullOrWhiteSpace(line.ManualUnitPriceReason)
+                ? line.ManualUnitPriceReason.Trim()
+                : null;
 
             sale.Details.Add(new SaleDetail
             {
-                ProductId = productVersion.ProductId,
-                ProductVersionId = productVersion.Id,
-                TaxRateId = taxRate.Id,
-                TaxCategory = taxRate.TaxCategory,
-                TaxCategoryName = taxRate.TaxCategoryName,
-                AccountingCategory = taxRate.AccountingCategory,
+                ProductId = resolvedLine.ProductId,
+                ProductVersionId = resolvedLine.ProductVersionId,
+                TaxRateId = resolvedLine.TaxRateId,
+                TaxCategory = resolvedLine.TaxCategory,
+                TaxCategoryName = resolvedLine.TaxCategoryName,
+                AccountingCategory = resolvedLine.AccountingCategory,
                 Quantity = line.Quantity,
                 UnitPrice = line.UnitPrice,
-                TaxRate = taxRate.Rate,
+                CustomerProductPriceId = resolvedLine.CustomerProductPriceId,
+                IsManualUnitPrice = isManualUnitPrice,
+                AutoUnitPrice = resolvedLine.AutoUnitPrice,
+                ManualUnitPriceReason = manualReason,
+                TaxRate = resolvedLine.TaxRate,
                 TaxAmount = taxAmount,
                 Amount = amount
             });
@@ -223,6 +239,10 @@ public static class SaleEndpoints
                 AccountingCategory = detail.AccountingCategory,
                 Quantity = -detail.Quantity,
                 UnitPrice = detail.UnitPrice,
+                CustomerProductPriceId = detail.CustomerProductPriceId,
+                IsManualUnitPrice = detail.IsManualUnitPrice,
+                AutoUnitPrice = detail.AutoUnitPrice,
+                ManualUnitPriceReason = detail.ManualUnitPriceReason,
                 TaxRate = detail.TaxRate,
                 TaxAmount = -detail.TaxAmount,
                 Amount = -detail.Amount
@@ -482,6 +502,50 @@ public static class SaleEndpoints
             version.ValidFrom));
     }
 
+    private static async Task<IResult> PreviewSalesLine(
+        AppDbContext dbContext,
+        long customerId,
+        long productId,
+        DateTime salesDate,
+        CancellationToken cancellationToken)
+    {
+        if (salesDate == default)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                [nameof(salesDate)] = ["売上日は必須です。"]
+            });
+        }
+
+        var date = salesDate.Date;
+        var customer = await LoadCustomerAsync(dbContext, customerId, date, cancellationToken);
+        if (customer is null)
+        {
+            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
+        }
+
+        var resolvedLine = await ResolveSalesLineAsync(dbContext, customer.CustomerId, productId, date, cancellationToken);
+        if (resolvedLine.ErrorMessage is not null)
+        {
+            return BuildSalesLineResolutionErrorResult(resolvedLine);
+        }
+
+        return Results.Ok(new SalesLinePreviewResponse(
+            resolvedLine.ProductId,
+            resolvedLine.ProductCode,
+            resolvedLine.ProductVersionId,
+            resolvedLine.Name,
+            resolvedLine.Unit,
+            resolvedLine.AutoUnitPrice,
+            resolvedLine.CustomerProductPriceId,
+            resolvedLine.TaxCategory,
+            resolvedLine.TaxCategoryName,
+            resolvedLine.TaxRate,
+            resolvedLine.TaxRateId,
+            resolvedLine.IsDiscontinued,
+            resolvedLine.ProductVersionValidFrom));
+    }
+
     private static async Task<SaleResponse?> BuildSaleResponse(
         AppDbContext dbContext,
         long saleId,
@@ -551,6 +615,10 @@ public static class SaleEndpoints
                 detail.AccountingCategory,
                 detail.Quantity,
                 detail.UnitPrice,
+                detail.CustomerProductPriceId,
+                detail.IsManualUnitPrice,
+                detail.AutoUnitPrice,
+                detail.ManualUnitPriceReason,
                 detail.TaxRate,
                 detail.TaxAmount,
                 detail.Amount))
@@ -631,6 +699,212 @@ public static class SaleEndpoints
     private static string GetUserName(ClaimsPrincipal user)
     {
         return user.Identity?.Name?.Trim() is { Length: > 0 } name ? name : "unknown";
+    }
+
+    private static IResult BuildSalesLineResolutionErrorResult(SalesLineResolution resolvedLine)
+    {
+        return resolvedLine.ErrorKind switch
+        {
+            SalesLineResolutionErrorKind.ProductNotFound => Results.NotFound(new { message = resolvedLine.ErrorMessage }),
+            SalesLineResolutionErrorKind.ProductVersionNotFound => Results.NotFound(new { message = resolvedLine.ErrorMessage }),
+            SalesLineResolutionErrorKind.TaxRateNotFound => Results.NotFound(new { message = resolvedLine.ErrorMessage }),
+            _ => Results.NotFound(new { message = resolvedLine.ErrorMessage })
+        };
+    }
+
+    private static async Task<SalesLineResolution> ResolveSalesLineAsync(
+        AppDbContext dbContext,
+        long customerId,
+        long productId,
+        DateTime salesDate,
+        CancellationToken cancellationToken)
+    {
+        var resolvedLines = await ResolveSalesLinesAsync(
+            dbContext,
+            customerId,
+            [productId],
+            salesDate,
+            cancellationToken);
+
+        return resolvedLines[0];
+    }
+
+    private static async Task<List<SalesLineResolution>> ResolveSalesLinesAsync(
+        AppDbContext dbContext,
+        long customerId,
+        List<long> productIds,
+        DateTime salesDate,
+        CancellationToken cancellationToken)
+    {
+        var distinctProductIds = productIds.Distinct().ToList();
+
+        var products = await dbContext.Products
+            .AsNoTracking()
+            .Where(product => distinctProductIds.Contains(product.Id))
+            .Select(product => new { product.Id, product.ProductCode })
+            .ToListAsync(cancellationToken);
+        var productsById = products.ToDictionary(product => product.Id);
+
+        var productVersions = await dbContext.ProductVersions
+            .AsNoTracking()
+            .Where(version => distinctProductIds.Contains(version.ProductId) && version.ValidFrom <= salesDate)
+            .OrderByDescending(version => version.ValidFrom)
+            .ThenByDescending(version => version.Id)
+            .ToListAsync(cancellationToken);
+        var latestProductVersionsByProductId = productVersions
+            .GroupBy(version => version.ProductId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var taxCategories = latestProductVersionsByProductId.Values
+            .Select(version => version.TaxCategory)
+            .Distinct()
+            .ToList();
+
+        var taxRates = await dbContext.TaxRates
+            .AsNoTracking()
+            .Where(rate => taxCategories.Contains(rate.TaxCategory) && rate.ValidFrom <= salesDate)
+            .OrderByDescending(rate => rate.ValidFrom)
+            .ThenByDescending(rate => rate.Id)
+            .ToListAsync(cancellationToken);
+        var latestTaxRatesByCategory = taxRates
+            .GroupBy(rate => rate.TaxCategory)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var customerProductPrices = await dbContext.CustomerProductPrices
+            .AsNoTracking()
+            .Where(price => price.CustomerId == customerId
+                && distinctProductIds.Contains(price.ProductId)
+                && price.ValidFrom <= salesDate)
+            .OrderByDescending(price => price.ValidFrom)
+            .ThenByDescending(price => price.Id)
+            .ToListAsync(cancellationToken);
+        var latestCustomerProductPricesByProductId = customerProductPrices
+            .GroupBy(price => price.ProductId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var resolvedLines = new List<SalesLineResolution>();
+        foreach (var productId in productIds)
+        {
+            if (!productsById.TryGetValue(productId, out var product))
+            {
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductNotFound, "商品が見つかりません。"));
+                continue;
+            }
+
+            if (!latestProductVersionsByProductId.TryGetValue(productId, out var productVersion))
+            {
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductVersionNotFound, "対象日に適用できる商品履歴がありません。"));
+                continue;
+            }
+
+            if (!latestTaxRatesByCategory.TryGetValue(productVersion.TaxCategory, out var taxRate))
+            {
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.TaxRateNotFound, "対象日に適用できる税率がありません。"));
+                continue;
+            }
+
+            latestCustomerProductPricesByProductId.TryGetValue(productId, out var customerProductPrice);
+            resolvedLines.Add(SalesLineResolution.Succeeded(
+                product.Id,
+                product.ProductCode,
+                productVersion.Id,
+                productVersion.Name,
+                productVersion.Unit,
+                customerProductPrice?.UnitPrice ?? productVersion.StandardUnitPrice,
+                customerProductPrice?.Id,
+                taxRate.TaxCategory,
+                taxRate.TaxCategoryName,
+                taxRate.AccountingCategory,
+                taxRate.Rate,
+                taxRate.Id,
+                productVersion.IsDiscontinued,
+                productVersion.ValidFrom));
+        }
+
+        return resolvedLines;
+    }
+
+    private enum SalesLineResolutionErrorKind
+    {
+        None,
+        ProductNotFound,
+        ProductVersionNotFound,
+        TaxRateNotFound
+    }
+
+    private sealed record SalesLineResolution(
+        long ProductId,
+        string ProductCode,
+        long ProductVersionId,
+        string Name,
+        string Unit,
+        decimal AutoUnitPrice,
+        long? CustomerProductPriceId,
+        string TaxCategory,
+        string TaxCategoryName,
+        string AccountingCategory,
+        decimal TaxRate,
+        long TaxRateId,
+        bool IsDiscontinued,
+        DateTime ProductVersionValidFrom,
+        SalesLineResolutionErrorKind ErrorKind,
+        string? ErrorMessage)
+    {
+        public static SalesLineResolution Succeeded(
+            long productId,
+            string productCode,
+            long productVersionId,
+            string name,
+            string unit,
+            decimal autoUnitPrice,
+            long? customerProductPriceId,
+            string taxCategory,
+            string taxCategoryName,
+            string accountingCategory,
+            decimal taxRate,
+            long taxRateId,
+            bool isDiscontinued,
+            DateTime productVersionValidFrom)
+        {
+            return new SalesLineResolution(
+                productId,
+                productCode,
+                productVersionId,
+                name,
+                unit,
+                autoUnitPrice,
+                customerProductPriceId,
+                taxCategory,
+                taxCategoryName,
+                accountingCategory,
+                taxRate,
+                taxRateId,
+                isDiscontinued,
+                productVersionValidFrom,
+                SalesLineResolutionErrorKind.None,
+                null);
+        }
+
+        public static SalesLineResolution Failed(SalesLineResolutionErrorKind errorKind, string errorMessage)
+        {
+            return new SalesLineResolution(
+                0,
+                string.Empty,
+                0,
+                string.Empty,
+                string.Empty,
+                0,
+                null,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                0,
+                0,
+                false,
+                default,
+                errorKind,
+                errorMessage);
+        }
     }
 
     private sealed record CustomerVersionSnapshot(

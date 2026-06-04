@@ -8,7 +8,8 @@ public sealed record CreateSaleRequest(
 public sealed record CreateSaleLineRequest(
     long ProductId,
     decimal Quantity,
-    decimal UnitPrice);
+    decimal UnitPrice,
+    string? ManualUnitPriceReason);
 
 public sealed record SaleListItemResponse(
     long SaleId,
@@ -39,6 +40,10 @@ public sealed record SaleDetailLineResponse(
     string AccountingCategory,
     decimal Quantity,
     decimal UnitPrice,
+    long? CustomerProductPriceId,
+    bool IsManualUnitPrice,
+    decimal AutoUnitPrice,
+    string? ManualUnitPriceReason,
     decimal TaxRate,
     decimal TaxAmount,
     decimal Amount);
@@ -82,3 +87,18 @@ public sealed record SalesProductPreviewResponse(
     decimal TaxRate,
     bool IsDiscontinued,
     DateTime ValidFrom);
+
+public sealed record SalesLinePreviewResponse(
+    long ProductId,
+    string ProductCode,
+    long ProductVersionId,
+    string Name,
+    string Unit,
+    decimal AutoUnitPrice,
+    long? CustomerProductPriceId,
+    string TaxCategory,
+    string TaxCategoryName,
+    decimal TaxRate,
+    long TaxRateId,
+    bool IsDiscontinued,
+    DateTime ProductVersionValidFrom);

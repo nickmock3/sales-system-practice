@@ -30,6 +30,16 @@ public sealed class SaleDetail
 
     public decimal UnitPrice { get; set; }
 
+    public long? CustomerProductPriceId { get; set; }
+
+    public CustomerProductPrice? CustomerProductPrice { get; set; }
+
+    public bool IsManualUnitPrice { get; set; }
+
+    public decimal AutoUnitPrice { get; set; }
+
+    public string? ManualUnitPriceReason { get; set; }
+
     public decimal TaxRate { get; set; }
 
     public decimal TaxAmount { get; set; }

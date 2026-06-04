@@ -165,6 +165,10 @@ SQLite で確認する場合は `limit 1` に読み替える。
 
 売上入力補助 API は、売上日、得意先 ID、商品 ID を受け取り、商品履歴、税区分、税率、自動取得単価、得意先別商品単価 ID を返す。
 
+売上入力補助 API は `GET /api/sales/preview-sales-line` とする。既存の `GET /api/sales/preview-product` は得意先別単価を考慮しない互換用 API として残す。
+
+売上登録 API では、登録時に同じ単価決定ロジックを再実行する。画面から送られた単価が自動取得単価と一致する場合は `IsManualUnitPrice = false`、異なる場合は `IsManualUnitPrice = true` とし、`AutoUnitPrice` には登録時に再計算した自動取得単価を保存する。
+
 ## バリデーション
 
 - 得意先 ID は存在する `Customers.Id` であること。

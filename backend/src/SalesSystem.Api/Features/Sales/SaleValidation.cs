@@ -55,6 +55,7 @@ internal static class SaleValidation
         var productKey = $"Lines[{index}].{nameof(CreateSaleLineRequest.ProductId)}";
         var quantityKey = $"Lines[{index}].{nameof(CreateSaleLineRequest.Quantity)}";
         var unitPriceKey = $"Lines[{index}].{nameof(CreateSaleLineRequest.UnitPrice)}";
+        var manualUnitPriceReasonKey = $"Lines[{index}].{nameof(CreateSaleLineRequest.ManualUnitPriceReason)}";
 
         if (line.ProductId <= 0)
         {
@@ -77,6 +78,11 @@ internal static class SaleValidation
         else if (decimal.Round(line.UnitPrice, 2) != line.UnitPrice)
         {
             errors[unitPriceKey] = ["単価は小数2桁までで指定してください。"];
+        }
+
+        if (line.ManualUnitPriceReason?.Trim().Length > 300)
+        {
+            errors[manualUnitPriceReasonKey] = ["手入力変更理由は300文字以内で指定してください。"];
         }
     }
 }
