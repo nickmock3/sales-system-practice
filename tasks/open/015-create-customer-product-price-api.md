@@ -39,9 +39,10 @@
 - 売上登録 API と売上入力補助 API で、単価決定ロジックを共通化する。
 - 売上明細に採用単価の根拠を保存する。
   - 採用単価
-  - 採用単価種別
-  - 採用単価根拠 ID
-- 売上詳細 API で採用単価種別を確認できるようにする。
+  - 得意先別商品単価 ID
+  - 手入力変更有無
+  - 自動取得単価
+- 売上詳細 API で得意先別商品単価 ID、手入力変更有無、自動取得単価を確認できるようにする。
 - API テストを追加する。
 
 ## データ案
@@ -71,15 +72,21 @@ CustomerProductPrices
 4. 売上登録後に単価マスタや商品標準単価が変わっても、登録済み売上明細の単価は変えない。
 ```
 
-## 採用単価種別案
+## 売上明細への単価根拠保存案
 
 ```text
-CustomerProductPrice
-ProductStandard
-Manual
+SaleDetails
+- CustomerProductPriceId nullable
+- IsManualUnitPrice
+- AutoUnitPrice
+- ManualUnitPriceReason nullable
 ```
 
-`Manual` は売上入力画面で単価手入力変更を許可する場合に使う。手入力変更理由を必須にするかは後続で検討する。
+得意先別商品単価を採用した場合は `CustomerProductPriceId` に `CustomerProductPrices.Id` を保存する。
+
+商品標準単価を採用した場合は `CustomerProductPriceId` を `null` にし、既存の `ProductVersionId` を標準単価の根拠として扱う。
+
+売上入力画面で単価を手入力変更した場合は `IsManualUnitPrice` を `true` にし、`UnitPrice` には変更後単価、`AutoUnitPrice` には変更前に自動取得した単価を保存する。手入力変更理由を必須にするかは後続で検討する。
 
 ## テスト観点
 
@@ -88,9 +95,9 @@ Manual
 - 売上日以前で一番新しい得意先別商品単価を取得できる。
 - 得意先別商品単価がある場合、売上登録でその単価が採用される。
 - 得意先別商品単価がない場合、商品標準単価が採用される。
-- 売上明細に採用単価種別と採用単価根拠 ID が保存される。
+- 売上明細に得意先別商品単価 ID、手入力変更有無、自動取得単価が保存される。
 - 単価マスタ変更後も、登録済み売上明細の単価は変わらない。
-- 売上入力補助 API と売上登録 API の採用単価が一致する。
+- 売上入力補助 API と売上登録 API の自動取得単価が一致する。
 
 ## 完了時の記録
 

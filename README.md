@@ -20,6 +20,14 @@
 - `docs/learning/vscode-csharp-devkit.md`: VS Code と C# Dev Kit
 - `docs/learning/dependency-injection-and-packages.md`: `PackageReference` と DI
 
+主な業務仕様:
+
+- `specs/product-master.md`: 商品マスタ
+- `specs/customer-master.md`: 得意先マスタ
+- `specs/tax-rates.md`: 税率
+- `specs/unit-prices.md`: 得意先別単価
+- `specs/sales-entry.md`: 売上入力
+
 ## Local Development
 
 ### 必要なツール

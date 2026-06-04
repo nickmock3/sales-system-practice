@@ -18,7 +18,7 @@
 - 売上日時点の商品情報取得
 - 売上日時点の得意先情報取得
 - 売上日時点の税率取得
-- 標準単価の自動反映
+- 得意先別単価または商品標準単価の自動反映
 - 単価の手入力変更
 - 明細金額の自動計算
 - 税額の自動計算
@@ -88,6 +88,10 @@ SaleDetails
 - AccountingCategory
 - Quantity
 - UnitPrice
+- CustomerProductPriceId nullable
+- IsManualUnitPrice
+- AutoUnitPrice
+- ManualUnitPriceReason
 - TaxRate
 - TaxAmount
 - Amount
@@ -101,12 +105,14 @@ SaleDetails
 4. 商品を選択する。
 5. 売上日以前で一番新しい `ProductVersions` を取得する。
 6. 商品履歴の税区分から、売上日以前で一番新しい `TaxRates` を取得する。
-7. 取得した標準単価を初期単価にする。
+7. `specs/unit-prices.md` の単価採用ルールに従い、得意先別商品単価または商品標準単価を初期単価にする。
 8. 数量、単価、税率から金額と税額を計算する。
 9. 売上に `CustomerVersionId` を保存する。
-10. 売上明細に `ProductVersionId`、登録時点の `TaxRateId`、税区分コード、税区分名、会計分類、単価、税率、税額、金額を保存する。
+10. 売上明細に `ProductVersionId`、登録時点の `TaxRateId`、税区分コード、税区分名、会計分類、単価、得意先別商品単価 ID、手入力変更有無、自動取得単価、手入力変更理由、税率、税額、金額を保存する。
 
 売上明細の採用税区分は、税率マスタ履歴を追跡する `TaxRateId` に加えて、登録時点の `TaxCategory`、`TaxCategoryName`、`AccountingCategory` をスナップショットとして保存する。税率マスタの名称や会計分類の扱いが後で変わっても、登録済み売上の表示・会計集計はこのスナップショットを使い、後から変えない。
+
+売上明細の採用単価は、登録時点の `UnitPrice` に加えて、`CustomerProductPriceId`、`IsManualUnitPrice`、`AutoUnitPrice`、`ManualUnitPriceReason` を保存する。得意先別商品単価を採用した場合は `CustomerProductPriceId` で根拠を追跡し、商品標準単価を採用した場合は既存の `ProductVersionId` を根拠として扱う。得意先別単価や商品標準単価が後で変わっても、登録済み売上の単価と採用単価根拠は後から変えない。単価採用ルールの詳細は `specs/unit-prices.md` に定義する。
 
 ## 売上日変更時のルール
 
@@ -170,4 +176,5 @@ TaxRate     decimal(5, 4)
 - 税額は明細ごとに1円未満を切り捨てできる。
 - 売上登録時に `CustomerVersionId` と `ProductVersionId` が保存される。
 - 登録時点の単価、税率、税額、金額が売上明細に保存される。
+- 登録時点の得意先別商品単価 ID、手入力変更有無、自動取得単価が売上明細に保存される。
 - 登録時点の税区分と税率マスタ履歴を保存できる。

@@ -55,6 +55,7 @@ CustomerVersions
 - 得意先の同一性は `Customers` で表す。
 - 変更される得意先属性は `CustomerVersions` に持たせる。
 - 得意先名、住所、電話番号の変更は履歴追加で表現する。
+- 得意先ごとの商品単価は得意先履歴ではなく、`specs/unit-prices.md` で定義する得意先別単価として別管理する。
 - `CustomerVersions` は原則更新しない。
 - 同じ `CustomerId` と `ValidFrom` の得意先履歴を重複登録できない。
 - 指定日時点の得意先情報は、指定日以前で一番新しい得意先履歴を使う。
@@ -78,4 +79,3 @@ limit 1;
 - 指定日以前で一番新しい得意先履歴を取得できる。
 - 同じ `CustomerId` と `ValidFrom` の履歴を重複登録できない。
 - 初回 `ValidFrom` より前の日付では得意先履歴が取得できない。
-
