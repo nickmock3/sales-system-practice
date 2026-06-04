@@ -175,6 +175,15 @@ public sealed class MasterConstraintTests
 
         dbContext.Customers.Add(customer);
         dbContext.Products.AddRange(product, otherProduct);
+        var taxRate = new TaxRate
+        {
+            TaxCategory = "STANDARD",
+            TaxCategoryName = "標準税率",
+            AccountingCategory = "TAXABLE_STANDARD",
+            Rate = 0.1m,
+            ValidFrom = new DateTime(2026, 1, 1)
+        };
+        dbContext.TaxRates.Add(taxRate);
         await dbContext.SaveChangesAsync();
 
         var sale = new Sale
@@ -190,6 +199,10 @@ public sealed class MasterConstraintTests
         {
             ProductId = product.Id,
             ProductVersionId = otherProduct.Versions[0].Id,
+            TaxRateId = taxRate.Id,
+            TaxCategory = taxRate.TaxCategory,
+            TaxCategoryName = taxRate.TaxCategoryName,
+            AccountingCategory = taxRate.AccountingCategory,
             Quantity = 1m,
             UnitPrice = 100m,
             TaxRate = 0.1m,

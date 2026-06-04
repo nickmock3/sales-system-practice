@@ -82,10 +82,12 @@ SaleDetails
 - SaleId
 - ProductId
 - ProductVersionId
+- TaxRateId
+- TaxCategory
+- TaxCategoryName
+- AccountingCategory
 - Quantity
 - UnitPrice
-- TaxCategory
-- TaxRateId
 - TaxRate
 - TaxAmount
 - Amount
@@ -102,10 +104,9 @@ SaleDetails
 7. 取得した標準単価を初期単価にする。
 8. 数量、単価、税率から金額と税額を計算する。
 9. 売上に `CustomerVersionId` を保存する。
-10. 売上明細に `ProductVersionId`、登録時点の `TaxCategory`、`TaxRateId`、単価、税率、税額、金額を保存する。
+10. 売上明細に `ProductVersionId`、登録時点の `TaxRateId`、税区分コード、税区分名、会計分類、単価、税率、税額、金額を保存する。
 
-`TaxCategory` と `TaxRateId` の保存は task012 で実装する。
-task011 の時点では、税率マスタ側で同率の別税区分を扱えるようにし、既存の売上明細には従来どおり税率値と税額を保存する。
+売上明細の採用税区分は、税率マスタ履歴を追跡する `TaxRateId` に加えて、登録時点の `TaxCategory`、`TaxCategoryName`、`AccountingCategory` をスナップショットとして保存する。税率マスタの名称や会計分類の扱いが後で変わっても、登録済み売上の表示・会計集計はこのスナップショットを使い、後から変えない。
 
 ## 売上日変更時のルール
 

@@ -83,6 +83,10 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal(2, detail.Details.Count);
         Assert.Equal("商品A 最新", detail.Details[0].ProductName);
         Assert.Equal(100.01m, detail.Details[0].UnitPrice);
+        Assert.True(detail.Details[0].TaxRateId > 0);
+        Assert.Equal("STANDARD", detail.Details[0].TaxCategory);
+        Assert.Equal("標準税率", detail.Details[0].TaxCategoryName);
+        Assert.Equal("TAXABLE_STANDARD", detail.Details[0].AccountingCategory);
         Assert.Equal(0.10m, detail.Details[0].TaxRate);
         Assert.Equal(10.00m, detail.Details[0].TaxAmount);
         Assert.Equal(100.51m, detail.Details[0].Amount);
@@ -97,6 +101,105 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal("最新得意先", item.CustomerName);
         Assert.Equal(238.16m, item.TotalAmount);
         Assert.Equal(nameof(SaleStatus.Active), item.Status);
+    }
+
+    [Fact]
+    public async Task CreateSale_WithSameRateDifferentTaxCategories_SavesTaxCategorySnapshot()
+    {
+        // 同じ 8% の税率でも軽減税率と旧標準税率が別の採用税区分として売上明細に保存されることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var reducedProductId = await CreateProductHistoryAsync(client, "P001", "食品", 100.00m, "REDUCED", false, "2026-01-01");
+        var oldStandardProductId = await CreateProductHistoryAsync(client, "P002", "旧税率商品", 200.00m, "OLD_STANDARD", false, "2026-01-01");
+
+        await CreateTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
+        await CreateTaxRateAsync(client, "OLD_STANDARD", 0.08m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId = reducedProductId,
+                    quantity = 1m,
+                    unitPrice = 100.00m
+                },
+                new
+                {
+                    productId = oldStandardProductId,
+                    quantity = 1m,
+                    unitPrice = 200.00m
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<SaleResponse>();
+        Assert.NotNull(created);
+        Assert.Equal(2, created.Details.Count);
+
+        var reducedDetail = Assert.Single(created.Details, detail => detail.ProductId == reducedProductId);
+        Assert.Equal("REDUCED", reducedDetail.TaxCategory);
+        Assert.Equal("軽減税率", reducedDetail.TaxCategoryName);
+        Assert.Equal("TAXABLE_REDUCED", reducedDetail.AccountingCategory);
+        Assert.Equal(0.08m, reducedDetail.TaxRate);
+        Assert.Equal(8.00m, reducedDetail.TaxAmount);
+
+        var oldStandardDetail = Assert.Single(created.Details, detail => detail.ProductId == oldStandardProductId);
+        Assert.Equal("OLD_STANDARD", oldStandardDetail.TaxCategory);
+        Assert.Equal("旧標準税率", oldStandardDetail.TaxCategoryName);
+        Assert.Equal("TAXABLE_OLD_STANDARD", oldStandardDetail.AccountingCategory);
+        Assert.Equal(0.08m, oldStandardDetail.TaxRate);
+        Assert.Equal(16.00m, oldStandardDetail.TaxAmount);
+        Assert.NotEqual(reducedDetail.TaxRateId, oldStandardDetail.TaxRateId);
+    }
+
+    [Fact]
+    public async Task GetSale_AfterTaxRateChange_ReturnsRegisteredTaxSnapshot()
+    {
+        // 税率マスタに新しい履歴を追加しても登録済み売上明細の税率値と税区分スナップショットが変わらないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
+
+        using var createResponse = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 1m,
+                    unitPrice = 100.00m
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<SaleResponse>();
+        var registeredDetail = Assert.Single(created!.Details);
+
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-05-01");
+
+        using var detailResponse = await client.GetAsync($"/api/sales/{created.SaleId}");
+        var detail = await detailResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        Assert.NotNull(detail);
+        var currentDetail = Assert.Single(detail.Details);
+        Assert.Equal(registeredDetail.TaxRateId, currentDetail.TaxRateId);
+        Assert.Equal("STANDARD", currentDetail.TaxCategory);
+        Assert.Equal("標準税率", currentDetail.TaxCategoryName);
+        Assert.Equal("TAXABLE_STANDARD", currentDetail.AccountingCategory);
+        Assert.Equal(0.08m, currentDetail.TaxRate);
+        Assert.Equal(8.00m, currentDetail.TaxAmount);
     }
 
     [Fact]
@@ -154,6 +257,10 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal(-sale.TotalAmount, cancellationSale.TotalAmount);
         Assert.Equal(-originalDetail.Quantity, cancellationDetail.Quantity);
         Assert.Equal(originalDetail.UnitPrice, cancellationDetail.UnitPrice);
+        Assert.Equal(originalDetail.TaxRateId, cancellationDetail.TaxRateId);
+        Assert.Equal(originalDetail.TaxCategory, cancellationDetail.TaxCategory);
+        Assert.Equal(originalDetail.TaxCategoryName, cancellationDetail.TaxCategoryName);
+        Assert.Equal(originalDetail.AccountingCategory, cancellationDetail.AccountingCategory);
         Assert.Equal(originalDetail.TaxRate, cancellationDetail.TaxRate);
         Assert.Equal(-originalDetail.TaxAmount, cancellationDetail.TaxAmount);
         Assert.Equal(-originalDetail.Amount, cancellationDetail.Amount);

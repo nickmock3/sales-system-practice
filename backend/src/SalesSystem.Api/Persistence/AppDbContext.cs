@@ -140,6 +140,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(detail => detail.SaleId).HasColumnName("SALE_ID");
             entity.Property(detail => detail.ProductId).HasColumnName("PRODUCT_ID");
             entity.Property(detail => detail.ProductVersionId).HasColumnName("PRODUCT_VERSION_ID");
+            entity.Property(detail => detail.TaxRateId).HasColumnName("TAX_RATE_ID");
+            entity.Property(detail => detail.TaxCategory).HasColumnName("TAX_CATEGORY").HasMaxLength(30).IsRequired();
+            entity.Property(detail => detail.TaxCategoryName).HasColumnName("TAX_CATEGORY_NAME").HasMaxLength(50).IsRequired();
+            entity.Property(detail => detail.AccountingCategory).HasColumnName("ACCOUNTING_CATEGORY").HasMaxLength(50).IsRequired();
             entity.Property(detail => detail.Quantity).HasColumnName("QUANTITY").HasPrecision(18, 3);
             entity.Property(detail => detail.UnitPrice).HasColumnName("UNIT_PRICE").HasPrecision(18, 2);
             entity.Property(detail => detail.TaxRate).HasColumnName("TAX_RATE").HasPrecision(5, 4);
@@ -148,6 +152,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasIndex(detail => detail.SaleId).HasDatabaseName("IX_SALE_DETAILS_SALE_ID");
             entity.HasIndex(detail => detail.ProductId).HasDatabaseName("IX_SALE_DETAILS_PRODUCT_ID");
             entity.HasIndex(detail => detail.ProductVersionId).HasDatabaseName("IX_SALE_DETAILS_PRODUCT_VERSION_ID");
+            entity.HasIndex(detail => detail.TaxRateId).HasDatabaseName("IX_SALE_DETAILS_TAX_RATE_ID");
             entity.HasOne(detail => detail.Sale)
                 .WithMany(sale => sale.Details)
                 .HasForeignKey(detail => detail.SaleId)
@@ -164,6 +169,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasPrincipalKey(version => new { version.Id, version.ProductId })
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("FK_SALE_DETAILS_PRODUCT_VERSIONS");
+            entity.HasOne(detail => detail.TaxRateHistory)
+                .WithMany()
+                .HasForeignKey(detail => detail.TaxRateId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_SALE_DETAILS_TAX_RATES");
         });
 
         modelBuilder.Entity<SaleStatusHistory>(entity =>

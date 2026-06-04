@@ -16,6 +16,16 @@ public sealed class SaleDetail
 
     public ProductVersion ProductVersion { get; set; } = null!;
 
+    public long TaxRateId { get; set; }
+
+    public TaxRate TaxRateHistory { get; set; } = null!;
+
+    public string TaxCategory { get; set; } = string.Empty;
+
+    public string TaxCategoryName { get; set; } = string.Empty;
+
+    public string AccountingCategory { get; set; } = string.Empty;
+
     public decimal Quantity { get; set; }
 
     public decimal UnitPrice { get; set; }
