@@ -109,3 +109,69 @@ SaleDetails
 - 売上明細への採用単価根拠の保存方針
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+### 追加した仕様
+
+- 得意先別商品単価 API のルートを `/api/customer-product-prices` とした。
+- 得意先別商品単価の履歴取得・履歴追加は、既存の得意先・商品マスタ API に合わせて `/versions` を主ルートとした。
+- 後方互換的に分かりやすい業務名として `/history` も同じ処理にマッピングした。
+- 指定日プレビューでは、対象日に有効な得意先履歴・商品履歴を確認したうえで、得意先別商品単価があれば `CustomerProductPrice`、なければ `ProductStandard` を単価根拠として返す。
+
+### 追加したエンティティと DB カラム
+
+- 今回の新規追加はなし。
+- `014-revise-sales-entry-preview-api.md` で追加済みの `CustomerProductPrice` エンティティ、`CUSTOMER_PRODUCT_PRICES` テーブル、`SALE_DETAILS` の単価根拠列を利用した。
+
+### 追加したマイグレーション
+
+- 今回の新規追加はなし。
+- 既存の `20260604021447_AddCustomerProductPriceAndSaleDetailUnitPriceSource` で必要なテーブル・カラムが作成済みであることを確認した。
+
+### 追加した API
+
+- `GET /api/customer-product-prices`
+  - 得意先別商品単価一覧を取得する。
+  - `customerId`、`productId`、`customerCode`、`productCode` で絞り込みできる。
+- `POST /api/customer-product-prices`
+  - 得意先別商品単価履歴を新規登録する。
+- `GET /api/customer-product-prices/{customerId}/{productId}/versions`
+  - 指定した得意先・商品の単価履歴を取得する。
+- `POST /api/customer-product-prices/{customerId}/{productId}/versions`
+  - 指定した得意先・商品の単価履歴を追加する。
+- `GET /api/customer-product-prices/{customerId}/{productId}/history`
+  - `/versions` と同じ履歴取得 API。
+- `POST /api/customer-product-prices/{customerId}/{productId}/history`
+  - `/versions` と同じ履歴追加 API。
+- `GET /api/customer-product-prices/preview`
+  - `customerId`、`productId`、`targetDate` から指定日時点の自動取得単価を返す。
+
+### 単価決定ロジックの実装方針
+
+- 得意先別商品単価 API のプレビューでは、`ValidFrom <= targetDate` の得意先別商品単価を `ValidFrom desc, Id desc` で検索し、見つかった場合はその単価を採用する。
+- 得意先別商品単価が見つからない場合は、同じ対象日の商品履歴 `ProductVersions.StandardUnitPrice` にフォールバックする。
+- 売上登録 API と売上入力補助 API は既に同じ private 解決処理を使っているため、今回は独立サービス化せず、API 側に同一ルールのクエリを実装した。
+- 今後、単価決定ルールが増える場合は、売上 API と得意先別単価 API の両方から呼べるサービスへ抽出する。
+
+### 売上明細への採用単価根拠の保存方針
+
+- 売上明細の保存方針は既存実装を利用する。
+- 得意先別商品単価を採用した場合は `SaleDetails.CustomerProductPriceId` に採用元 ID を保存する。
+- 商品標準単価にフォールバックした場合は `CustomerProductPriceId` を `null` とし、`ProductVersionId` を標準単価の根拠として扱う。
+- `IsManualUnitPrice` と `AutoUnitPrice` は売上登録時に再計算した自動取得単価と入力単価を比較して保存する。
+- 得意先別商品単価 API 経由で登録した単価を使って売上登録し、その後に単価履歴を追加しても登録済み売上明細の `UnitPrice`、`AutoUnitPrice`、`CustomerProductPriceId` が変わらないことをテストで確認した。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx --filter CustomerProductPriceApiTests
+dotnet test backend/SalesSystem.slnx
+```
+
+### Oracle 対応で後続確認が必要な点
+
+- `CUSTOMER_PRODUCT_PRICES` の複合一意制約 `CustomerId, ProductId, ValidFrom` が Oracle provider でも期待どおり競合検出されること。
+- `ValidFrom <= targetDate` と `OrderByDescending(...).ThenByDescending(...)` による履歴取得が Oracle SQL に意図どおり変換されること。
+- `UnitPrice decimal(18, 2)` と `SaleDetails.AutoUnitPrice decimal(18, 2)` の精度・丸めが Oracle 上でも期待どおり扱われること。
+- 一覧取得の相関サブクエリが Oracle 上で性能上問題ないか、件数が増えた段階で実行計画を確認すること。
