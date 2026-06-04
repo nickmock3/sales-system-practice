@@ -84,6 +84,8 @@ SaleDetails
 - ProductVersionId
 - Quantity
 - UnitPrice
+- TaxCategory
+- TaxRateId
 - TaxRate
 - TaxAmount
 - Amount
@@ -100,7 +102,10 @@ SaleDetails
 7. 取得した標準単価を初期単価にする。
 8. 数量、単価、税率から金額と税額を計算する。
 9. 売上に `CustomerVersionId` を保存する。
-10. 売上明細に `ProductVersionId`、単価、税率、税額、金額を保存する。
+10. 売上明細に `ProductVersionId`、登録時点の `TaxCategory`、`TaxRateId`、単価、税率、税額、金額を保存する。
+
+`TaxCategory` と `TaxRateId` の保存は task012 で実装する。
+task011 の時点では、税率マスタ側で同率の別税区分を扱えるようにし、既存の売上明細には従来どおり税率値と税額を保存する。
 
 ## 売上日変更時のルール
 
@@ -115,6 +120,7 @@ SaleDetails
 - 合計金額は明細金額と税額をもとに計算する。
 - 登録後にマスタ履歴や税率が変わっても、過去の売上金額は変えない。
 - 登録後に入力間違いが見つかった場合も、保存済みの売上金額は直接更新せず、取消と再登録で訂正する。
+- 軽減税率 8% と旧標準税率 8% のように税率値が同じ場合でも、売上登録時点の税区分を後続の会計集計で区別できるようにする。
 
 ### 保存精度
 
@@ -163,3 +169,4 @@ TaxRate     decimal(5, 4)
 - 税額は明細ごとに1円未満を切り捨てできる。
 - 売上登録時に `CustomerVersionId` と `ProductVersionId` が保存される。
 - 登録時点の単価、税率、税額、金額が売上明細に保存される。
+- 登録時点の税区分と税率マスタ履歴を保存できる。

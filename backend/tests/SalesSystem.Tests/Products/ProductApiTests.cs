@@ -92,6 +92,27 @@ public sealed class ProductApiTests : IClassFixture<SalesSystemWebApplicationFac
     }
 
     [Fact]
+    public async Task CreateProduct_WithUnknownTaxCategory_ReturnsValidationProblem()
+    {
+        // 税率マスタで定義されていない税区分の商品履歴は登録できないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+
+        using var response = await client.PostAsJsonAsync("/api/products", new
+        {
+            productCode = NewProductCode(),
+            name = "コピー用紙 A4",
+            unit = "箱",
+            standardUnitPrice = 1200m,
+            taxCategory = "UNKNOWN",
+            isDiscontinued = false,
+            validFrom = "2026-01-01"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CreateProductVersion_AddsHistoryWithoutUpdatingExistingVersion()
     {
         // 商品履歴追加時に既存履歴を更新せず新しい履歴として保存されることを確認する。

@@ -35,8 +35,62 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         var created = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
         Assert.NotNull(created);
         Assert.Equal("STANDARD", created.TaxCategory);
+        Assert.Equal("標準税率", created.TaxCategoryName);
+        Assert.Equal("TAXABLE_STANDARD", created.AccountingCategory);
         Assert.Equal(0.1m, created.Rate);
         Assert.Equal(new DateTime(2026, 1, 1), created.ValidFrom);
+    }
+
+    [Theory]
+    [InlineData("STANDARD", "標準税率", "TAXABLE_STANDARD", "0.10")]
+    [InlineData("REDUCED", "軽減税率", "TAXABLE_REDUCED", "0.08")]
+    [InlineData("NON_TAXABLE", "非課税", "NON_TAXABLE", "0.00")]
+    [InlineData("TAX_EXEMPT", "免税", "TAX_EXEMPT", "0.00")]
+    [InlineData("OLD_STANDARD", "旧標準税率", "TAXABLE_OLD_STANDARD", "0.08")]
+    public async Task CreateTaxRate_WithDefinedTaxCategory_CreatesTaxRateWithCategoryMetadata(
+        string taxCategory,
+        string taxCategoryName,
+        string accountingCategory,
+        string rateText)
+    {
+        // 定義済み税区分を登録すると税区分名と会計分類が保存されることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var rate = decimal.Parse(rateText);
+
+        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        {
+            taxCategory,
+            rate,
+            validFrom = "2026-01-01"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
+        Assert.NotNull(created);
+        Assert.Equal(taxCategory, created.TaxCategory);
+        Assert.Equal(taxCategoryName, created.TaxCategoryName);
+        Assert.Equal(accountingCategory, created.AccountingCategory);
+        Assert.Equal(rate, created.Rate);
+    }
+
+    [Fact]
+    public async Task CreateTaxRate_WithSameRateAndDifferentTaxCategory_CreatesSeparateRates()
+    {
+        // 同じ税率値でも税区分が異なれば別レコードとして登録できることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+
+        await CreateTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
+        await CreateTaxRateAsync(client, "OLD_STANDARD", 0.08m, "2026-01-01");
+
+        using var response = await client.GetAsync("/api/tax-rates");
+        var taxRates = await response.Content.ReadFromJsonAsync<List<TaxRateResponse>>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(taxRates);
+        Assert.Contains(taxRates, taxRate => taxRate.TaxCategory == "REDUCED" && taxRate.Rate == 0.08m);
+        Assert.Contains(taxRates, taxRate => taxRate.TaxCategory == "OLD_STANDARD" && taxRate.Rate == 0.08m);
     }
 
     [Fact]
@@ -70,6 +124,57 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         {
             taxCategory = "",
             rate = 0.12345m,
+            validFrom = "2026-01-01"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateTaxRate_WithUnknownTaxCategory_ReturnsValidationProblem()
+    {
+        // 定義されていない税区分を指定するとバリデーションエラーになることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+
+        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        {
+            taxCategory = "UNKNOWN",
+            rate = 0.1m,
+            validFrom = "2026-01-01"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateTaxRate_WithNonTaxableNonZeroRate_ReturnsValidationProblem()
+    {
+        // 非課税と免税に0以外の税率を指定するとバリデーションエラーになることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+
+        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        {
+            taxCategory = "NON_TAXABLE",
+            rate = 0.1m,
+            validFrom = "2026-01-01"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateTaxRate_WithTaxableZeroRate_ReturnsValidationProblem()
+    {
+        // 課税対象の税区分に0税率を指定するとバリデーションエラーになることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+
+        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        {
+            taxCategory = "STANDARD",
+            rate = 0m,
             validFrom = "2026-01-01"
         });
 
@@ -240,6 +345,8 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
     private sealed record TaxRateResponse(
         long TaxRateId,
         string TaxCategory,
+        string TaxCategoryName,
+        string AccountingCategory,
         decimal Rate,
         DateTime ValidFrom);
 }

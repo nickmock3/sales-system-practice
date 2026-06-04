@@ -3,6 +3,8 @@ namespace SalesSystem.Api.Features.Taxes;
 public sealed record TaxRateResponse(
     long TaxRateId,
     string TaxCategory,
+    string TaxCategoryName,
+    string AccountingCategory,
     decimal Rate,
     DateTime ValidFrom);
 

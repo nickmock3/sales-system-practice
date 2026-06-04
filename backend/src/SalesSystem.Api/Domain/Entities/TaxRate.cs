@@ -6,6 +6,10 @@ public sealed class TaxRate
 
     public string TaxCategory { get; set; } = string.Empty;
 
+    public string TaxCategoryName { get; set; } = string.Empty;
+
+    public string AccountingCategory { get; set; } = string.Empty;
+
     public decimal Rate { get; set; }
 
     public DateTime ValidFrom { get; set; }

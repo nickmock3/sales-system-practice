@@ -1,3 +1,5 @@
+using SalesSystem.Api.Features.Taxes;
+
 namespace SalesSystem.Api.Features.Products;
 
 internal static class ProductValidation
@@ -38,6 +40,13 @@ internal static class ProductValidation
         AddRequiredString(errors, nameof(CreateProductRequest.Name), name, 100);
         AddRequiredString(errors, nameof(CreateProductRequest.Unit), unit, 20);
         AddRequiredString(errors, nameof(CreateProductRequest.TaxCategory), taxCategory, 30);
+
+        if (!string.IsNullOrWhiteSpace(taxCategory)
+            && taxCategory.Length <= 30
+            && !TaxCategories.TryGet(taxCategory.Trim(), out _))
+        {
+            errors[nameof(CreateProductRequest.TaxCategory)] = ["未知の税区分です。"];
+        }
 
         if (standardUnitPrice < 0)
         {

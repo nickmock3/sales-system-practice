@@ -41,6 +41,14 @@ public static class TaxRateEndpoints
         if (!string.IsNullOrWhiteSpace(taxCategory))
         {
             var category = taxCategory.Trim();
+            if (!TaxCategories.TryGet(category, out _))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [nameof(taxCategory)] = ["未知の税区分です。"]
+                });
+            }
+
             query = query.Where(taxRate => taxRate.TaxCategory == category);
         }
 
@@ -65,6 +73,7 @@ public static class TaxRateEndpoints
         }
 
         var taxCategory = request.TaxCategory!.Trim();
+        TaxCategories.TryGet(taxCategory, out var taxCategoryDefinition);
         var validFrom = request.ValidFrom.Date;
 
         var taxRateExists = await dbContext.TaxRates.AnyAsync(
@@ -79,6 +88,8 @@ public static class TaxRateEndpoints
         var taxRate = new TaxRate
         {
             TaxCategory = taxCategory,
+            TaxCategoryName = taxCategoryDefinition.Name,
+            AccountingCategory = taxCategoryDefinition.AccountingCategory,
             Rate = request.Rate,
             ValidFrom = validFrom
         };
@@ -113,6 +124,10 @@ public static class TaxRateEndpoints
         {
             errors[nameof(taxCategory)] = ["30文字以内で指定してください。"];
         }
+        else if (!TaxCategories.TryGet(taxCategory.Trim(), out _))
+        {
+            errors[nameof(taxCategory)] = ["未知の税区分です。"];
+        }
 
         if (targetDate == default)
         {
@@ -146,6 +161,8 @@ public static class TaxRateEndpoints
         return new TaxRateResponse(
             taxRate.Id,
             taxRate.TaxCategory,
+            taxRate.TaxCategoryName,
+            taxRate.AccountingCategory,
             taxRate.Rate,
             taxRate.ValidFrom);
     }

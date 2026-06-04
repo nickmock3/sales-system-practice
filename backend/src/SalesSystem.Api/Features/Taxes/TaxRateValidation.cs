@@ -1,5 +1,28 @@
 namespace SalesSystem.Api.Features.Taxes;
 
+internal sealed record TaxCategoryDefinition(
+    string Code,
+    string Name,
+    string AccountingCategory,
+    bool RequiresZeroRate);
+
+internal static class TaxCategories
+{
+    private static readonly Dictionary<string, TaxCategoryDefinition> Definitions = new(StringComparer.Ordinal)
+    {
+        ["STANDARD"] = new TaxCategoryDefinition("STANDARD", "標準税率", "TAXABLE_STANDARD", false),
+        ["REDUCED"] = new TaxCategoryDefinition("REDUCED", "軽減税率", "TAXABLE_REDUCED", false),
+        ["NON_TAXABLE"] = new TaxCategoryDefinition("NON_TAXABLE", "非課税", "NON_TAXABLE", true),
+        ["TAX_EXEMPT"] = new TaxCategoryDefinition("TAX_EXEMPT", "免税", "TAX_EXEMPT", true),
+        ["OLD_STANDARD"] = new TaxCategoryDefinition("OLD_STANDARD", "旧標準税率", "TAXABLE_OLD_STANDARD", false)
+    };
+
+    public static bool TryGet(string taxCategory, out TaxCategoryDefinition definition)
+    {
+        return Definitions.TryGetValue(taxCategory, out definition!);
+    }
+}
+
 internal static class TaxRateValidation
 {
     public static Dictionary<string, string[]> ValidateCreateTaxRate(CreateTaxRateRequest request)
@@ -7,6 +30,16 @@ internal static class TaxRateValidation
         var errors = new Dictionary<string, string[]>();
 
         AddRequiredString(errors, nameof(request.TaxCategory), request.TaxCategory, 30);
+
+        TaxCategoryDefinition? taxCategoryDefinition = null;
+        if (!string.IsNullOrWhiteSpace(request.TaxCategory) && request.TaxCategory.Length <= 30)
+        {
+            var taxCategory = request.TaxCategory.Trim();
+            if (!TaxCategories.TryGet(taxCategory, out taxCategoryDefinition))
+            {
+                errors[nameof(request.TaxCategory)] = ["未知の税区分です。"];
+            }
+        }
 
         if (request.Rate < 0)
         {
@@ -19,6 +52,14 @@ internal static class TaxRateValidation
         else if (decimal.Round(request.Rate, 4) != request.Rate)
         {
             errors[nameof(request.Rate)] = ["税率は小数4桁までで指定してください。"];
+        }
+        else if (taxCategoryDefinition is { RequiresZeroRate: true } && request.Rate != 0.0000m)
+        {
+            errors[nameof(request.Rate)] = ["非課税・免税の税率は0.0000で指定してください。"];
+        }
+        else if (taxCategoryDefinition is { RequiresZeroRate: false } && request.Rate <= 0)
+        {
+            errors[nameof(request.Rate)] = ["課税対象の税率は0より大きい値で指定してください。"];
         }
 
         if (request.ValidFrom == default)

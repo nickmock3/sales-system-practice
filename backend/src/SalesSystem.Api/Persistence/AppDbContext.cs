@@ -97,6 +97,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasKey(taxRate => taxRate.Id).HasName("PK_TAX_RATES");
             entity.Property(taxRate => taxRate.Id).HasColumnName("ID");
             entity.Property(taxRate => taxRate.TaxCategory).HasColumnName("TAX_CATEGORY").HasMaxLength(30).IsRequired();
+            entity.Property(taxRate => taxRate.TaxCategoryName).HasColumnName("TAX_CATEGORY_NAME").HasMaxLength(50).IsRequired();
+            entity.Property(taxRate => taxRate.AccountingCategory).HasColumnName("ACCOUNTING_CATEGORY").HasMaxLength(50).IsRequired();
             entity.Property(taxRate => taxRate.Rate).HasColumnName("RATE").HasPrecision(5, 4);
             entity.Property(taxRate => taxRate.ValidFrom).HasColumnName("VALID_FROM").IsRequired();
             entity.HasIndex(taxRate => new { taxRate.TaxCategory, taxRate.ValidFrom })

@@ -57,3 +57,61 @@
 - 変更した API
 - 実行した確認コマンド
 - Oracle 対応で後続確認が必要な点
+
+## 完了記録
+
+### 更新した仕様
+
+- `specs/tax-rates.md`
+  - `TaxCategoryName` と `AccountingCategory` を追加した税率マスタ仕様に更新。
+  - `STANDARD`, `REDUCED`, `NON_TAXABLE`, `TAX_EXEMPT`, `OLD_STANDARD` を固定税区分として定義。
+  - 同じ税率値でも税区分コードが異なれば別レコードとして扱う方針を明記。
+  - 非課税・免税は `0.0000` として扱う方針を明記。
+- `specs/product-master.md`
+  - 商品履歴の税区分は税率仕様で定義された `TaxCategory` のみ指定できることを追記。
+- `specs/sales-entry.md`
+  - 売上明細に登録時点の税区分と税率履歴 ID を保存する将来方針を追記。
+  - task011 では税率マスタ側の再設計までとし、売上明細への保存は task012 で実装する境界を明記。
+
+### 変更したエンティティと DB カラム
+
+- `TaxRate` エンティティに以下を追加。
+  - `TaxCategoryName`
+  - `AccountingCategory`
+- `TAX_RATES` に以下の必須カラムを追加。
+  - `TAX_CATEGORY_NAME`
+  - `ACCOUNTING_CATEGORY`
+- 一意制約は既存どおり `TAX_CATEGORY`, `VALID_FROM` の組み合わせを維持。
+
+### 追加したマイグレーション
+
+- `20260604014823_RedesignTaxRateMaster`
+  - `TAX_RATES` に `TAX_CATEGORY_NAME`, `ACCOUNTING_CATEGORY` を追加。
+  - 既存データの既知税区分に対して名称と会計分類を埋め戻す SQL を追加。
+
+### 変更した API
+
+- 税率マスタ API
+  - レスポンスに `taxCategoryName`, `accountingCategory` を追加。
+  - 登録時に `taxCategory` から名称と会計分類をサーバー側で設定。
+  - 未知の税区分をバリデーションエラーに変更。
+  - 非課税・免税は 0% のみ、課税対象は 0% より大きい税率のみ許可。
+- 商品マスタ API
+  - 商品履歴の `taxCategory` も税率仕様で定義された固定税区分のみ許可。
+
+### 実行した確認コマンド
+
+```bash
+dotnet test backend/SalesSystem.slnx
+```
+
+結果:
+
+- 失敗 0
+- 合格 71
+
+### Oracle 対応で後続確認が必要な点
+
+- 追加カラム `TAX_CATEGORY_NAME`, `ACCOUNTING_CATEGORY` の Oracle 上の型、長さ、NOT NULL 追加時の既存データ移行を確認する。
+- マイグレーション内の `UPDATE TAX_RATES ... CASE ... END` が Oracle provider 生成・実行時にも問題なく動くか確認する。
+- 税率取得クエリの `fetch first 1 rows only` 相当の SQL が Oracle 上で期待どおり生成されるか確認する。

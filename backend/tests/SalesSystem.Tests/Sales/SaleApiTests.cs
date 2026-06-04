@@ -564,7 +564,10 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
             validFrom
         });
 
-        response.EnsureSuccessStatusCode();
+        if (response.StatusCode != HttpStatusCode.Conflict)
+        {
+            response.EnsureSuccessStatusCode();
+        }
     }
 
     private async Task<SaleResponse> CreateBasicSaleAsync(
@@ -573,7 +576,7 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         string productCode = "P001")
     {
         var customerId = await CreateCustomerHistoryAsync(client, customerCode, $"得意先{customerCode}", "2026-01-01");
-        var taxCategory = $"STANDARD-{productCode}";
+        var taxCategory = "STANDARD";
         var productId = await CreateProductHistoryAsync(client, productCode, $"商品{productCode}", 100.00m, taxCategory, false, "2026-01-01");
         await CreateTaxRateAsync(client, taxCategory, 0.10m, "2026-01-01");
 
