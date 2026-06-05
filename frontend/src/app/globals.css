@@ -375,12 +375,53 @@ a {
   padding-bottom: 18px;
 }
 
-.result-empty-row {
-  padding: 12px 16px 16px;
-  border-top: 1px solid #f1f5f9;
+.result-empty-state {
+  display: grid;
+  min-height: 132px;
+  place-items: center;
+  padding: 28px 16px;
   color: #64748b;
-  font-size: 14px;
-  font-weight: 700;
+  text-align: center;
+}
+
+.result-empty-state p {
+  color: #475569;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.result-empty-state span {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.form-empty-state {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  padding: 24px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  text-align: center;
+}
+
+.form-empty-state p {
+  color: #475569;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.form-empty-state span {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .data-table-row-selected {

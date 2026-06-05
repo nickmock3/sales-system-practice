@@ -381,48 +381,50 @@ export default function ProductsPage() {
               </div>
               <Badge tone="neutral">{products.length} 件</Badge>
             </div>
-            <div className="overflow-x-auto">
-              <table className="data-table text-left">
-                <thead>
-                  <tr>
-                    <th>商品コード</th>
-                    <th>商品名</th>
-                    <th>単位</th>
-                    <th className="text-right">標準単価</th>
-                    <th>税区分</th>
-                    <th>状態</th>
-                    <th>適用開始日</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {products.map((product) => (
-                    <tr
-                      className={cn(
-                        "cursor-pointer hover:bg-slate-50",
-                        selectedProductId === product.productId
-                          && "data-table-row-selected",
-                      )}
-                      key={product.productId}
-                      onClick={() => setSelectedProductId(product.productId)}
-                    >
-                      <td className="font-mono text-slate-700">
-                        {product.productCode}
-                      </td>
-                      <td className="font-semibold">{product.name}</td>
-                      <td>{product.unit}</td>
-                      <td className="text-right font-mono">
-                        {formatMoney(product.standardUnitPrice)} 円
-                      </td>
-                      <td>{taxCategoryLabels[product.taxCategory]}</td>
-                      <td>
-                        <ProductStatusBadge product={product} />
-                      </td>
-                      <td>{formatDate(product.validFrom)}</td>
+            {products.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="data-table text-left">
+                  <thead>
+                    <tr>
+                      <th>商品コード</th>
+                      <th>商品名</th>
+                      <th>単位</th>
+                      <th className="text-right">標準単価</th>
+                      <th>税区分</th>
+                      <th>状態</th>
+                      <th>適用開始日</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {products.map((product) => (
+                      <tr
+                        className={cn(
+                          "cursor-pointer hover:bg-slate-50",
+                          selectedProductId === product.productId
+                            && "data-table-row-selected",
+                        )}
+                        key={product.productId}
+                        onClick={() => setSelectedProductId(product.productId)}
+                      >
+                        <td className="font-mono text-slate-700">
+                          {product.productCode}
+                        </td>
+                        <td className="font-semibold">{product.name}</td>
+                        <td>{product.unit}</td>
+                        <td className="text-right font-mono">
+                          {formatMoney(product.standardUnitPrice)} 円
+                        </td>
+                        <td>{taxCategoryLabels[product.taxCategory]}</td>
+                        <td>
+                          <ProductStatusBadge product={product} />
+                        </td>
+                        <td>{formatDate(product.validFrom)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
             {isLoadingProducts ? (
               <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-600">
                 <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
@@ -430,9 +432,10 @@ export default function ProductsPage() {
               </p>
             ) : null}
             {!isLoadingProducts && products.length === 0 ? (
-              <p className="result-empty-row">
-                該当データなし
-              </p>
+              <div className="result-empty-state">
+                <p>該当データなし</p>
+                <span>検索条件を変更するか、新しい商品を登録してください。</span>
+              </div>
             ) : null}
           </section>
 
@@ -513,27 +516,41 @@ export default function ProductsPage() {
           <section className="surface section-pad" aria-labelledby="version-heading">
             <div className="section-heading">
               <h2 id="version-heading">商品履歴追加</h2>
-              <p>選択中の商品に、商品名・単価・税区分などの新しい履歴を追加します。</p>
+              <p>
+                {selectedProduct
+                  ? `${selectedProduct.productCode} に新しい履歴を追加します。`
+                  : "商品一覧から商品を選択すると履歴を追加できます。"}
+              </p>
             </div>
-            <form
-              className="grid gap-4"
-              onSubmit={versionForm.handleSubmit(submitVersion)}
-            >
-              <div className="grid gap-4 sm:grid-cols-2">
-                <ProductVersionFields form={versionForm} />
-              </div>
-              <Button
-                disabled={!selectedProduct || versionForm.formState.isSubmitting}
-                type="submit"
+            {selectedProduct ? (
+              <form
+                className="grid gap-4"
+                onSubmit={versionForm.handleSubmit(submitVersion)}
               >
-                {versionForm.formState.isSubmitting ? (
-                  <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-                ) : (
-                  <Plus aria-hidden="true" className="size-4" />
-                )}
-                履歴追加
-              </Button>
-            </form>
+                <fieldset
+                  className="grid gap-4 sm:grid-cols-2"
+                  disabled={!selectedProduct || versionForm.formState.isSubmitting}
+                >
+                  <ProductVersionFields form={versionForm} />
+                </fieldset>
+                <Button
+                  disabled={!selectedProduct || versionForm.formState.isSubmitting}
+                  type="submit"
+                >
+                  {versionForm.formState.isSubmitting ? (
+                    <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+                  ) : (
+                    <Plus aria-hidden="true" className="size-4" />
+                  )}
+                  履歴追加
+                </Button>
+              </form>
+            ) : (
+              <div className="form-empty-state">
+                <p>商品未選択</p>
+                <span>一覧で対象商品を選択してから履歴を追加します。</span>
+              </div>
+            )}
           </section>
         </div>
 
