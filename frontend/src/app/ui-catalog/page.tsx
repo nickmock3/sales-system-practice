@@ -71,8 +71,22 @@ function CatalogSection({
 export default function UiCatalogPage() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-950">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div className="app-brand">
+            <p className="app-brand-kicker">Sales System Practice</p>
+            <p className="app-brand-title">販売管理システム</p>
+          </div>
+          <div className="app-header-actions" aria-label="認証 UI サンプル">
+            <Button variant="secondary">一般ユーザー</Button>
+            <Button>管理者</Button>
+            <Button variant="ghost">ログアウト</Button>
+          </div>
+        </div>
+      </header>
+
       <div className="app-shell flex flex-col gap-6">
-        <header className="surface surface-pad">
+        <div className="page-intro">
           <nav
             aria-label="breadcrumb"
             className="flex items-center gap-1 text-sm font-semibold text-slate-500"
@@ -83,24 +97,12 @@ export default function UiCatalogPage() {
             <ChevronRight aria-hidden="true" className="size-4" />
             <span className="text-slate-700">UI カタログ</span>
           </nav>
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-end">
-            <div>
-              <h1 className="text-3xl font-bold leading-tight">UI カタログ</h1>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                業務画面で使う共通 UI の密度、余白、状態表示を確認する静的カタログです。
-                実画面で使う部品だけを、同じ基準で並べます。
-              </p>
-            </div>
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 surface-pad">
-              <p className="text-xs font-bold text-slate-500">認証 UI サンプル</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button variant="secondary">一般ユーザー</Button>
-                <Button>管理者</Button>
-                <Button variant="ghost">ログアウト</Button>
-              </div>
-            </div>
-          </div>
-        </header>
+          <h1 className="mt-3">UI カタログ</h1>
+          <p>
+            業務画面で使う共通 UI の密度、余白、状態表示を確認する静的カタログです。
+            実画面で使う部品だけを、同じ基準で並べます。
+          </p>
+        </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
           <CatalogSection
