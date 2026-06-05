@@ -31,6 +31,8 @@ frontend/
       layout.tsx
       page.tsx
       globals.css
+      ui-catalog/
+        page.tsx
       products/
         page.tsx
         _api.ts
@@ -44,6 +46,12 @@ frontend/
         _schemas.ts
         _types.ts
       tax-rates/
+        page.tsx
+        _api.ts
+        _components/
+        _schemas.ts
+        _types.ts
+      customer-product-prices/
         page.tsx
         _api.ts
         _components/
@@ -69,6 +77,8 @@ frontend/
 
 - 画面固有の API 呼び出し、型、Zod スキーマ、コンポーネントは `app/<route>/` 配下に置く。
 - ルートセグメント内の補助ファイルは、URL にならないことが分かるように `_api.ts`、`_components/` のような private folder / private file 相当の命名にする。
+- トップページ `/` は業務画面への入口と接続状態の確認に絞り、UI 部品や表示パターンの見本は `/ui-catalog` に分離する。
+- 得意先別商品単価画面は `app/customer-product-prices/` に置き、得意先マスタと商品マスタから得意先 ID または商品 ID で絞り込める導線を作る。
 - 複数画面で使う UI プリミティブは `src/components/ui/` に置く。
 - 複数画面で使う API 共通処理、環境変数、日付・金額表示、汎用ヘルパーは `src/lib/` に置く。
 - テスト共通処理は `src/test/` または `e2e/fixtures/` に置く。
@@ -153,6 +163,11 @@ frontend/
 - 業務システムとして、静かで情報を探しやすい UI を優先する。
 - 派手な hero、装飾的な背景、過剰なアニメーションは使わない。
 - マスタ画面は、一覧、選択中の詳細、履歴、登録・履歴追加フォームを確認しやすい構成にする。
+- 画面全体は淡いグレー背景、白い作業領域、控えめな境界線を基本にし、注意・成功・エラーだけに意味のある色を使う。
+- 操作ボタンは主要操作、補助操作、破壊的操作の優先度が分かる見た目にし、アイコンは `lucide-react` を使う。
+- テーブルは検索条件、一覧、選択中の詳細、履歴の関係が分かる密度を優先し、カードを重ねた装飾的な構成にしない。
+- フォームはラベル、入力、補足、エラーを近接させ、入力エラーでは原因と修正方法が分かる日本語文を表示する。
+- `/ui-catalog` は共通 UI の確認用ページとし、トップページや業務画面そのものをデザイン見本にしない。
 - Product Design プラグインを使う場合も、まずこの方針をブリーフとして確認する。
 - 個別画面の詳細デザインは、各画面タスクで決める。
 

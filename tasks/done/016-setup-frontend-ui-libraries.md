@@ -83,3 +83,54 @@
 - 記録したフロントエンド構成方針とデザイン方針
 - 実行した確認コマンドと結果
 - 残した制約や次タスク候補
+
+## 完了記録
+
+完了日: 2026-06-05
+
+### 導入したライブラリと用途
+
+- `tailwindcss`, `@tailwindcss/postcss`: Next.js App Router のグローバル CSS で Tailwind CSS v4 を使うために導入した。
+- `zod`: `NEXT_PUBLIC_API_BASE_URL` の検証など、環境変数や API 境界の検証に使うために導入した。
+- `react-hook-form`, `@hookform/resolvers`: 今後のマスタ画面フォームで Zod と連携した入力検証を行うために導入した。
+- `lucide-react`: 業務画面の操作アイコンに使うために導入した。
+- `clsx`, `tailwind-merge`: `cn()` ヘルパーで条件付き className と Tailwind 競合クラスを整理するために導入した。
+- `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`: 単体テストと軽量なコンポーネントテストのために導入した。
+- `@playwright/test`: 主要画面の E2E テストを実行するために導入した。
+
+### 追加・変更した設定ファイル
+
+- `frontend/postcss.config.mjs`: Tailwind CSS v4 用の PostCSS 設定を追加した。
+- `frontend/vitest.config.ts`: jsdom、Testing Library setup、`@/` alias、E2E 除外設定を追加した。
+- `frontend/playwright.config.ts`: Next.js dev server を起動して Chromium で E2E を実行する設定を追加した。
+- `frontend/package.json`: 導入ライブラリと `test`, `test:watch`, `test:e2e` scripts を追加した。
+- `frontend/bun.lock`: 依存関係追加に伴い更新した。
+
+### 追加した共通ヘルパーやディレクトリ
+
+- `frontend/src/lib/utils/cn.ts`: `clsx` と `tailwind-merge` を使う `cn()` ヘルパーを追加した。
+- `frontend/src/components/ui/button.tsx`: 共通 UI コンポーネントの最初の要素として Button を追加した。
+- `frontend/src/test/setup.ts`: Testing Library の jest-dom matcher を Vitest で使う設定を追加した。
+- `frontend/e2e/home.spec.ts`: Tailwind 前提のトップページ表示を確認する最小 E2E を追加した。
+
+### フロントエンド構成方針とデザイン方針
+
+- `specs/frontend-architecture.md` に `app/customer-product-prices/` の配置方針を追記した。
+- `specs/frontend-architecture.md` に業務画面の共通デザイン方針として、淡いグレー背景、白い作業領域、控えめな境界線、意味のある色、操作優先度、テーブル密度、フォームエラー表示の方針を追記した。
+- 既存トップページとグローバル CSS は Tailwind 前提に最小整理した。
+
+### 確認コマンドと結果
+
+- `bun install`: 成功。依存関係は no changes。
+- `bun lint`: 成功。
+- `bun run test`: 成功。Vitest で 2 ファイル 2 テストが成功。
+- `bun run test:e2e`: 成功。Playwright Chromium で 1 テストが成功。
+- `bun run build`: 成功。
+
+補足: `bun test` は Bun の内蔵テストランナーが Playwright の E2E ファイルも読み込むため、このリポジトリでは Vitest 用の確認コマンドを `bun run test` とした。
+
+### 残した制約や次タスク候補
+
+- `shadcn/ui` は導入していない。画面数が増えて自前 UI の重複が大きくなった時点で再検討する。
+- ダミー認証 UI はトップページに静的なボタンを置く段階に留めた。実際のユーザー切り替え、`localStorage` 保存、API ヘッダー付与は画面実装または API クライアント整備時に行う。
+- 個別画面の詳細デザインは、各画面タスクで Product Design プラグインを使ってブリーフ確認後に決める。
