@@ -241,7 +241,11 @@ test("別の得意先を選択した直後に古い履歴とプレビューを�
   await expect(page.getByLabel("指定日プレビュー").getByText("プレビューなし")).toBeVisible();
   releaseVersions?.();
   releasePreview?.();
-  await expect(page.getByRole("cell", { name: "渋谷産業" })).toBeVisible();
+  await expect(
+    page.getByLabel("得意先履歴", { exact: true }).getByRole("cell", {
+      name: "渋谷産業",
+    }),
+  ).toBeVisible();
 });
 
 test("検索で選択得意先が自動変更されたら古い履歴とプレビューを消す", async ({ page }) => {

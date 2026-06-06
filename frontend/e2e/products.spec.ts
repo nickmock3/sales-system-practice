@@ -111,3 +111,50 @@ test("商品登録と履歴追加後に一覧と履歴を更新できる", async
   await expect(page.getByText("商品履歴を追加し、一覧と履歴を更新しました。")).toBeVisible();
   await expect(page.getByText("50,000 円").first()).toBeVisible();
 });
+
+test("古い商品履歴のAPI応答が後から返っても表示しない", async ({ page }) => {
+  const secondProduct = {
+    productId: 2,
+    productCode: "P-2001",
+    productVersionId: 20,
+    name: "会議チェア",
+    unit: "脚",
+    standardUnitPrice: 12000,
+    taxCategory: "STANDARD",
+    isDiscontinued: false,
+    validFrom: "2026-06-05T00:00:00",
+  };
+  let resolveFirstVersions: (() => void) | undefined;
+
+  await page.route("**/api/products", async (route) => {
+    await route.fulfill({ json: [...products, secondProduct] });
+  });
+  await page.route("**/api/products/1/versions", async (route) => {
+    await new Promise<void>((resolve) => {
+      resolveFirstVersions = resolve;
+    });
+    await route.fulfill({ json: versions });
+  });
+  await page.route("**/api/products/2/versions", async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          ...secondProduct,
+          productVersionId: 21,
+          name: "会議チェア 現行",
+        },
+      ],
+    });
+  });
+
+  await page.goto("/products");
+  await expect.poll(() => Boolean(resolveFirstVersions)).toBe(true);
+
+  await page.getByRole("cell", { name: "P-2001" }).click();
+  await expect(page.getByText("会議チェア 現行")).toBeVisible();
+
+  resolveFirstVersions();
+
+  await expect(page.getByText("旧標準デスク")).not.toBeVisible();
+  await expect(page.getByText("会議チェア 現行")).toBeVisible();
+});

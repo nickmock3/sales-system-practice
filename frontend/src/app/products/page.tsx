@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ChevronRight,
@@ -23,6 +23,7 @@ import {
   setDummyAuthMode,
   type DummyAuthMode,
 } from "@/lib/api";
+import { useListSelectionState } from "@/lib/hooks/use-list-selection-state";
 import { cn } from "@/lib/utils/cn";
 import {
   createProduct,
@@ -122,14 +123,12 @@ export default function ProductsPage() {
   const [name, setName] = useState("");
   const [discontinuedFilter, setDiscontinuedFilter] =
     useState<DiscontinuedFilter>("all");
-  const [products, setProducts] = useState<ProductListItem[]>([]);
-  const [selectedProductId, setSelectedProductId] = useState<number>();
   const [versions, setVersions] = useState<ProductListItem[]>([]);
-  const [listError, setListError] = useState("");
+  const versionsRequestIdRef = useRef(0);
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
-  const [isLoadingVersions, setIsLoadingVersions] = useState(false);
+  const [loadingVersionsProductId, setLoadingVersionsProductId] =
+    useState<number>();
 
   const productForm = useForm<ProductFormValues>({
     resolver: zodResolver(productFormSchema),
@@ -141,47 +140,58 @@ export default function ProductsPage() {
     defaultValues: defaultVersionValues(),
   });
 
-  const selectedProduct = products.find(
-    (product) => product.productId === selectedProductId,
-  );
+  const {
+    error: listError,
+    isLoading: isLoadingProducts,
+    items: products,
+    loadItems: loadProductItems,
+    selectedId: selectedProductId,
+    selectedIdRef: selectedProductIdRef,
+    selectedItem: selectedProduct,
+    selectId: setSelectedProductId,
+    setError: setListError,
+  } = useListSelectionState<ProductListItem, number>({
+    getId: (product) => product.productId,
+    onSelectionChange: () => setVersions([]),
+  });
 
   const loadProducts = async (params = buildSearchParams(
     productCode,
     name,
     discontinuedFilter,
-  )) => {
-    setIsLoadingProducts(true);
-    setListError("");
-
-    try {
-      const nextProducts = await fetchProducts(params);
-      setProducts(nextProducts);
-      setSelectedProductId((current) =>
-        nextProducts.some((product) => product.productId === current)
-          ? current
-          : nextProducts[0]?.productId,
-      );
-    } catch (error) {
-      setListError(formatApiError(error));
-      setProducts([]);
-      setSelectedProductId(undefined);
-    } finally {
-      setIsLoadingProducts(false);
-    }
-  };
+  )) => loadProductItems(() => fetchProducts(params));
 
   const loadVersions = async (productId: number) => {
-    setIsLoadingVersions(true);
+    const requestId = versionsRequestIdRef.current + 1;
+    versionsRequestIdRef.current = requestId;
+    setLoadingVersionsProductId(productId);
 
     try {
-      setVersions(await fetchProductVersions(productId));
+      const nextVersions = await fetchProductVersions(productId);
+      if (
+        versionsRequestIdRef.current === requestId
+        && selectedProductIdRef.current === productId
+      ) {
+        setVersions(nextVersions);
+      }
     } catch (error) {
-      setListError(formatApiError(error));
-      setVersions([]);
+      if (
+        versionsRequestIdRef.current === requestId
+        && selectedProductIdRef.current === productId
+      ) {
+        setListError(formatApiError(error));
+        setVersions([]);
+      }
     } finally {
-      setIsLoadingVersions(false);
+      if (versionsRequestIdRef.current === requestId) {
+        setLoadingVersionsProductId(undefined);
+      }
     }
   };
+
+  const isLoadingVersions =
+    selectedProductId !== undefined
+    && loadingVersionsProductId === selectedProductId;
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadProducts({}), 0);
@@ -489,7 +499,9 @@ export default function ProductsPage() {
             </div>
             <form
               className="grid gap-4"
-              onSubmit={productForm.handleSubmit(submitProduct)}
+              onSubmit={(event) => {
+                void productForm.handleSubmit(submitProduct)(event);
+              }}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="grid gap-1.5 text-sm font-semibold">
@@ -525,7 +537,9 @@ export default function ProductsPage() {
             {selectedProduct ? (
               <form
                 className="grid gap-4"
-                onSubmit={versionForm.handleSubmit(submitVersion)}
+                onSubmit={(event) => {
+                  void versionForm.handleSubmit(submitVersion)(event);
+                }}
               >
                 <fieldset
                   className="grid gap-4 sm:grid-cols-2"

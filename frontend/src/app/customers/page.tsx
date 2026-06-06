@@ -23,6 +23,7 @@ import {
   setDummyAuthMode,
   type DummyAuthMode,
 } from "@/lib/api";
+import { useListSelectionState } from "@/lib/hooks/use-list-selection-state";
 import { cn } from "@/lib/utils/cn";
 import {
   createCustomer,
@@ -56,15 +57,6 @@ type CustomerPreviewError = {
   readonly targetDate?: string;
   readonly message: string;
 };
-
-type CustomerLoadResult =
-  | {
-      readonly ok: true;
-      readonly items: CustomerListItem[];
-    }
-  | {
-      readonly ok: false;
-    };
 
 type CustomerLoadOptions = {
   readonly preserveSelectionOnError?: boolean;
@@ -149,10 +141,6 @@ export default function CustomersPage() {
   );
   const [customerCode, setCustomerCode] = useState("");
   const [name, setName] = useState("");
-  const [customers, setCustomers] = useState<CustomerListItem[]>([]);
-  const customersRequestIdRef = useRef(0);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number>();
-  const selectedCustomerIdRef = useRef<number>();
   const versionsRequestIdRef = useRef(0);
   const [versionsResult, setVersionsResult] = useState<CustomerVersionsResult>({
     items: [],
@@ -161,12 +149,10 @@ export default function CustomersPage() {
   const previewDateRef = useRef(previewDate);
   const previewRequestIdRef = useRef(0);
   const [previewResult, setPreviewResult] = useState<CustomerPreviewResult>({});
-  const [listError, setListError] = useState("");
   const [formError, setFormError] = useState("");
   const [previewErrorState, setPreviewErrorState] =
     useState<CustomerPreviewError>({ message: "" });
   const [successMessage, setSuccessMessage] = useState("");
-  const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
   const [loadingVersionsCustomerId, setLoadingVersionsCustomerId] =
     useState<number>();
   const [loadingPreviewKey, setLoadingPreviewKey] = useState<{
@@ -184,9 +170,28 @@ export default function CustomersPage() {
     defaultValues: defaultVersionValues(),
   });
 
-  const selectedCustomer = customers.find(
-    (customer) => customer.customerId === selectedCustomerId,
-  );
+  const clearSelectedCustomerState = () => {
+    setVersionsResult({ items: [] });
+    setPreviewResult({});
+    setPreviewErrorState({ message: "" });
+  };
+
+  const {
+    error: listError,
+    isLoading: isLoadingCustomers,
+    items: customers,
+    loadItems: loadCustomerItems,
+    replaceItems: replaceCustomers,
+    selectedId: selectedCustomerId,
+    selectedIdRef: selectedCustomerIdRef,
+    selectedItem: selectedCustomer,
+    selectId: setSelectedCustomer,
+    setError: setListError,
+  } = useListSelectionState<CustomerListItem, number>({
+    getId: (customer) => customer.customerId,
+    onSelectionChange: clearSelectedCustomerState,
+  });
+
   const versions =
     versionsResult.customerId === selectedCustomerId ? versionsResult.items : [];
   const preview =
@@ -207,22 +212,6 @@ export default function CustomersPage() {
     && loadingPreviewKey?.customerId === selectedCustomerId
     && loadingPreviewKey?.targetDate === previewDate;
 
-  const clearSelectedCustomerState = () => {
-    setVersionsResult({ items: [] });
-    setPreviewResult({});
-    setPreviewErrorState({ message: "" });
-  };
-
-  const setSelectedCustomer = (customerId: number | undefined) => {
-    if (customerId === selectedCustomerIdRef.current) {
-      return;
-    }
-
-    clearSelectedCustomerState();
-    selectedCustomerIdRef.current = customerId;
-    setSelectedCustomerId(customerId);
-  };
-
   const changePreviewDate = (nextPreviewDate: string) => {
     previewDateRef.current = nextPreviewDate;
     setPreviewDate(nextPreviewDate);
@@ -231,44 +220,7 @@ export default function CustomersPage() {
   const loadCustomers = async (
     params = buildSearchParams(customerCode, name),
     options: CustomerLoadOptions = {},
-  ): Promise<CustomerLoadResult> => {
-    const requestId = customersRequestIdRef.current + 1;
-    customersRequestIdRef.current = requestId;
-    setIsLoadingCustomers(true);
-    setListError("");
-
-    try {
-      const nextCustomers = await fetchCustomers(params);
-      if (customersRequestIdRef.current !== requestId) {
-        return { ok: false };
-      }
-
-      setCustomers(nextCustomers);
-      const current = selectedCustomerIdRef.current;
-      const nextSelectedCustomerId = nextCustomers.some(
-        (customer) => customer.customerId === current,
-      )
-        ? current
-        : nextCustomers[0]?.customerId;
-      setSelectedCustomer(nextSelectedCustomerId);
-      return { ok: true, items: nextCustomers };
-    } catch (error) {
-      if (customersRequestIdRef.current !== requestId) {
-        return { ok: false };
-      }
-
-      setListError(formatApiError(error));
-      if (!options.preserveSelectionOnError) {
-        setCustomers([]);
-        setSelectedCustomer(undefined);
-      }
-      return { ok: false };
-    } finally {
-      if (customersRequestIdRef.current === requestId) {
-        setIsLoadingCustomers(false);
-      }
-    }
-  };
+  ) => loadCustomerItems(() => fetchCustomers(params), options);
 
   const loadVersions = async (customerId: number) => {
     const requestId = versionsRequestIdRef.current + 1;
@@ -392,8 +344,9 @@ export default function CustomersPage() {
         isEffectiveToday(created.validFrom)
         && !nextCustomers.some((customer) => customer.customerId === created.customerId)
       ) {
-        setCustomers([created, ...nextCustomers]);
-        setSelectedCustomer(created.customerId);
+        replaceCustomers([created, ...nextCustomers], {
+          preferredSelectedId: created.customerId,
+        });
         return;
       }
 
