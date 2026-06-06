@@ -45,3 +45,35 @@
 - 追加・変更した API クライアント処理
 - 実行した確認コマンドと結果
 - 残した制約や次タスク候補
+
+## 完了記録
+
+### 実装した画面・コンポーネントの概要
+
+- `frontend/src/app/customers/page.tsx` に得意先マスタ画面を追加した。
+- 得意先コード・得意先名での検索、得意先一覧、選択中得意先の詳細、得意先新規登録、得意先履歴追加、得意先履歴一覧、指定日プレビューを同一画面で扱う構成にした。
+- 得意先詳細には、得意先別商品単価が別マスタであることが分かる導線として `/customer-product-prices?customerId=...` へのリンクを追加した。
+- 入力エラー、API エラー、ローディング、登録・履歴追加の完了メッセージを画面上に表示するようにした。
+
+### 追加・変更した API クライアント処理
+
+- `frontend/src/app/customers/_types.ts` に得意先一覧、履歴、検索条件、フォーム値の TypeScript 型を追加した。
+- `frontend/src/app/customers/_schemas.ts` に API レスポンスとフォーム入力の Zod スキーマを追加した。
+- `frontend/src/app/customers/_api.ts` に以下の API 呼び出しを追加した。
+  - `GET /api/customers`
+  - `POST /api/customers`
+  - `GET /api/customers/{customerId}/versions`
+  - `POST /api/customers/{customerId}/versions`
+  - `GET /api/customers/{customerId}/preview?targetDate=...`
+- `frontend/eslint.config.mjs` で Playwright 生成物の `test-results/` と `playwright-report/` を lint 対象外にした。
+
+### 実行した確認コマンドと結果
+
+- `cd frontend && bun lint`: 成功。
+- `cd frontend && bun run test`: 成功。3 test files / 3 tests passed。
+- `cd frontend && bun run test:e2e -- customers.spec.ts`: 成功。10 tests passed。
+
+### 残した制約や次タスク候補
+
+- 得意先別商品単価画面は task020 の範囲のため、今回はリンク導線のみ追加した。
+- `bun test` を直接実行すると Bun のテストランナーが Playwright E2E まで読み込み、既存構成上失敗する。通常の確認は `bun run test` と `bun run test:e2e` を使う。
