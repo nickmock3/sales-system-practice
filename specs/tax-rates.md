@@ -58,6 +58,19 @@ fetch first 1 rows only;
 
 SQLite で確認する場合は `limit 1` に読み替える。
 
+## API
+
+`specs/api-contracts.md` の税率 API に従う。
+
+- `GET /api/tax-rates?asOf=` — 税区分ごとに `asOf` 時点 1 件の一覧
+- `GET /api/tax-rates/{taxCategory}?asOf=` — 指定日時点の税率情報
+- `GET /api/tax-rates/{taxCategory}/changes` — 変更履歴一覧
+- `POST /api/tax-rates/{taxCategory}/changes` — 指定日からの税率変更（初回登録もここ）
+
+画面と API では「履歴追加」ではなく「指定日からの税率変更」「変更履歴」として表現する。内部実装では引き続き `TaxRates` への履歴レコード追加で表現する。
+
+通常レスポンスには `TaxRateId` を含めない。DB 内部では `TaxRates.Id` を保持し、売上明細の `TaxRateId` 保存にも使う。変更履歴 DTO には行 ID も `changedAt` も含めない。
+
 ## テスト観点
 
 - 売上日以前で一番新しい税率を取得できる。

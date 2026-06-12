@@ -143,6 +143,15 @@ SaleCorrections
 - 再登録売上が訂正元を持つ場合は、`SaleCorrections` に `CorrectionType = Replacement` で元売上との関係を保存できる。
 - 再登録時点ではなく、再登録する売上日のマスタ履歴と税率を適用する。
 
+## API と内部 ID
+
+売上詳細 API では状態履歴を業務上の監査情報として返す。
+
+- `statusHistories` には `status`、`reason`、`changedAt`、`changedBy` を含める。
+- `SaleStatusHistoryId` は通常レスポンスに含めない。DB 内部では `SaleStatusHistories.Id` を保持する。
+
+取消・訂正関係の `originalSaleId`、`correctionSaleId` は業務追跡に必要なため公開する。これらは売上集約 ID であり、マスタ履歴行 ID ではない。
+
 ## 一覧・詳細表示
 
 売上一覧では以下を表示できるようにする。

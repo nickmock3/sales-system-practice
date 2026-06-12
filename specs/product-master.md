@@ -6,6 +6,8 @@
 
 商品情報の変更は既存行の更新ではなく、新しい商品履歴の追加として扱う。
 
+画面と API では「履歴追加」ではなく「指定日からの商品情報変更」「変更履歴」として表現する。内部実装では引き続き `ProductVersions` への履歴レコード追加で表現する。API 契約の詳細は `specs/api-contracts.md` を参照する。
+
 ## 画面機能
 
 - 商品一覧表示
@@ -13,9 +15,9 @@
 - 商品コード、商品名での絞り込み
 - 販売中、販売停止での絞り込み
 - 商品新規登録
-- 商品履歴追加
-- 商品履歴一覧
-- 指定日での商品情報プレビュー
+- 指定日からの商品情報変更
+- 変更履歴一覧
+- 指定日時点の商品情報参照
 - 販売停止登録
 - 入力バリデーション表示
 
@@ -27,7 +29,7 @@
 - 現在の標準単価
 - 税区分
 - 販売状態
-- 適用開始日
+- 適用開始日（`effectiveFrom`）
 
 ## 主な項目
 
@@ -37,7 +39,7 @@
 - 標準単価
 - 税区分
 - 販売停止フラグ
-- 適用開始日
+- 適用開始日（`effectiveFrom`）
 
 ## データ
 
@@ -82,10 +84,22 @@ order by ValidFrom desc
 limit 1;
 ```
 
+## API
+
+`specs/api-contracts.md` の商品 API に従う。
+
+- `GET /api/products` — 業務日時点の商品一覧
+- `POST /api/products` — 商品新規登録
+- `GET /api/products/{productId}?asOf=` — 指定日時点の商品情報
+- `GET /api/products/{productId}/changes` — 変更履歴一覧
+- `POST /api/products/{productId}/changes` — 指定日からの商品情報変更
+
+通常レスポンスには `ProductVersionId` を含めない。DB 内部では `ProductVersions.Id` を保持し、売上登録時の `ProductVersionId` 保存にも使う。
+
 ## テスト観点
 
 - 商品を登録できる。
-- 商品履歴を追加できる。
+- 指定日から商品情報を変更できる。
 - 定義されていない税区分の商品履歴は登録できない。
 - 指定日以前で一番新しい商品履歴を取得できる。
 - 同じ `ProductId` と `ValidFrom` の履歴を重複登録できない。

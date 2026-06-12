@@ -120,9 +120,21 @@ SaleDetails
 
 そのため、売上日変更時には選択済み明細の単価や税率を再取得するか、再取得するかどうかを確認する。
 
+## API
+
+`specs/api-contracts.md` の売上 API に従う。
+
+- `POST /api/sales` — 売上登録
+- `GET /api/sales` — 売上一覧
+- `GET /api/sales/{saleId}` — 売上詳細
+- `POST /api/sales/{saleId}/cancel` — 売上取消
+- `GET /api/sales/line-preview?salesDate=&customerId=&productId=` — 明細入力補助
+
+売上登録リクエストは売上日、得意先 ID、商品 ID、数量、単価を受け取る。採用するマスタ情報と税率、単価根拠はバックエンドが決定する。`ProductVersionId`、`CustomerVersionId`、`TaxRateId`、`CustomerProductPriceId` はリクエストでもレスポンスでも受け取らない。
+
 ## 売上入力補助 API
 
-売上入力画面で明細商品を選択したときは、`GET /api/sales/preview-sales-line` を使い、売上日・得意先・商品から登録時に採用される商品履歴、税区分、税率、自動取得単価を確認する。
+売上入力画面で明細商品を選択したときは、`GET /api/sales/line-preview` を使い、売上日・得意先・商品から登録時に採用される商品情報、税区分、税率、自動取得単価、単価根拠を確認する。
 
 入力:
 
@@ -135,26 +147,36 @@ productId
 レスポンス:
 
 ```text
-ProductId
-ProductCode
-ProductVersionId
-Name
-Unit
-AutoUnitPrice
-CustomerProductPriceId nullable
-TaxCategory
-TaxCategoryName
-TaxRate
-TaxRateId
-IsDiscontinued
-ProductVersionValidFrom
+productId
+productCode
+productName
+unit
+autoUnitPrice
+unitPriceSource
+taxCategory
+taxCategoryName
+accountingCategory
+taxRate
+isDiscontinued
 ```
 
-自動取得単価は `specs/unit-prices.md` の単価採用ルールで決定する。得意先別商品単価が存在する場合は `CustomerProductPriceId` を返し、商品標準単価へフォールバックした場合は `null` を返す。
+自動取得単価は `specs/unit-prices.md` の単価採用ルールで決定する。単価根拠は `unitPriceSource`（`CUSTOMER_PRODUCT_PRICE` または `PRODUCT_STANDARD`）で返す。
 
-対象日に適用できる得意先履歴、商品履歴、税率が存在しない場合はエラーにする。販売停止中の商品はプレビューでは `IsDiscontinued = true` として返し、売上登録 API では登録不可にする。
+得意先の売上日時点確認は `GET /api/customers/{customerId}?asOf={salesDate}` で行う。`GET /api/sales/preview-customer`、`GET /api/sales/preview-product`、`GET /api/sales/preview-sales-line` は廃止する。
 
-既存の `GET /api/sales/preview-product` は、得意先別単価を考慮しない旧形式として当面残す。
+指定日時点で利用できる得意先情報、商品情報、税率情報が存在しない場合はエラーにする。販売停止中の商品は `line-preview` では `isDiscontinued = true` として返し、売上登録 API では登録不可にする。
+
+## 売上詳細レスポンス
+
+売上詳細は登録時点のスナップショットを返す。以下を含める。
+
+- 得意先コード、得意先名
+- 商品コード、商品名、単位
+- 単価、税率、税区分、税区分名、会計分類
+- `unitPriceSource`
+- 手入力変更有無、自動取得単価、手入力変更理由
+
+`CustomerVersionId`、`ProductVersionId`、`TaxRateId`、`CustomerProductPriceId` は通常レスポンスに含めない。DB 内部では引き続き保存する。
 
 ## 金額計算
 

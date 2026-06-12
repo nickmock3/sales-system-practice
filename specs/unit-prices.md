@@ -12,14 +12,16 @@
 
 得意先ランク別単価は、ランクマスタ、得意先履歴、ランク別単価、得意先別単価との優先順位が増えるため、この段階では導入しない。得意先別単価の運用で不足が見えた段階の後続課題とする。
 
+画面と API では「履歴追加」ではなく「指定日からの単価変更」「変更履歴」として表現する。内部実装では引き続き `CustomerProductPrices` への履歴レコード追加で表現する。API 契約の詳細は `specs/api-contracts.md` を参照する。
+
 ## 画面機能
 
 - 得意先別単価一覧表示
 - 得意先、商品での絞り込み
 - 得意先別単価新規登録
-- 得意先別単価履歴追加
-- 得意先別単価履歴一覧
-- 指定日での得意先別単価プレビュー
+- 指定日からの単価変更
+- 変更履歴一覧
+- 指定日時点の単価参照
 - 入力バリデーション表示
 
 ## 一覧表示項目
@@ -29,14 +31,14 @@
 - 商品コード
 - 商品名
 - 単価
-- 適用開始日
+- 適用開始日（`effectiveFrom`）
 
 ## 主な項目
 
 - 得意先
 - 商品
 - 単価
-- 適用開始日
+- 適用開始日（`effectiveFrom`）
 
 ## データ
 
@@ -152,22 +154,24 @@ fetch first 1 rows only;
 
 SQLite で確認する場合は `limit 1` に読み替える。
 
-## API 方針
+## API
 
-得意先別単価 API は、後続タスクで以下を実装する。
+`specs/api-contracts.md` の得意先別商品単価 API に従う。
 
-- 得意先別単価一覧取得
-- 得意先別単価新規登録
-- 得意先別単価履歴追加
-- 指定日での得意先別単価プレビュー
+- `GET /api/customer-product-prices` — 組み合わせごとに `asOf` 時点 1 件の一覧
+- `POST /api/customer-product-prices` — 新しい得意先・商品の組み合わせに初回単価を登録
+- `GET /api/customer-product-prices/{customerId}/{productId}?asOf=` — 指定日時点の単価情報
+- `GET /api/customer-product-prices/{customerId}/{productId}/changes` — 変更履歴一覧
+- `POST /api/customer-product-prices/{customerId}/{productId}/changes` — 指定日からの単価変更
+- `GET /api/customer-product-prices/preview?customerId=&productId=&asOf=` — 単価プレビュー
 
-売上入力補助 API と売上登録 API は、単価決定ロジックを共通化する。
+集約の識別は `customerId` と `productId` の組み合わせとする。`/history` と `/versions` は廃止し、`/changes` に統一する。
 
-売上入力補助 API は、売上日、得意先 ID、商品 ID を受け取り、商品履歴、税区分、税率、自動取得単価、得意先別商品単価 ID を返す。
+通常レスポンスには `CustomerProductPriceId` を含めない。DB 内部では `CustomerProductPrices.Id` を保持し、売上明細の `CustomerProductPriceId` 保存にも使う。変更履歴 DTO には行 ID を含めない。`createdAt` は既存の永続化項目のためレスポンスに含めてよい。
 
-売上入力補助 API は `GET /api/sales/preview-sales-line` とする。既存の `GET /api/sales/preview-product` は得意先別単価を考慮しない互換用 API として残す。
+売上入力補助は `GET /api/sales/line-preview?salesDate=&customerId=&productId=` に統合する。レスポンスでは `unitPriceSource`（`CUSTOMER_PRODUCT_PRICE` または `PRODUCT_STANDARD`）で単価根拠を返し、内部 ID は返さない。
 
-売上登録 API では、登録時に同じ単価決定ロジックを再実行する。画面から送られた単価が自動取得単価と一致する場合は `IsManualUnitPrice = false`、異なる場合は `IsManualUnitPrice = true` とし、`AutoUnitPrice` には登録時に再計算した自動取得単価を保存する。
+売上登録 API では、登録時に同じ単価決定ロジックを再実行する。画面から送られた単価が自動取得単価と一致する場合は `IsManualUnitPrice = false`、異なる場合は `IsManualUnitPrice = true` とし、`AutoUnitPrice` には登録時に再計算した自動取得単価を保存する。`unitPriceSource` はリクエストでは受け取らず、バックエンドが決定して DB と売上詳細レスポンスへ反映する。
 
 ## バリデーション
 
@@ -180,7 +184,7 @@ SQLite で確認する場合は `limit 1` に読み替える。
 ## テスト観点
 
 - 得意先別単価を登録できる。
-- 得意先別単価履歴を追加できる。
+- 指定日から単価を変更できる。
 - 同じ得意先、商品、適用開始日の単価履歴を重複登録できない。
 - 売上日以前で一番新しい得意先別単価を取得できる。
 - 得意先別単価がある場合、その単価が採用される。
@@ -193,9 +197,5 @@ SQLite で確認する場合は `limit 1` に読み替える。
 
 ## 後続課題
 
-- 得意先別商品単価 API を実装する。
-- 売上入力補助 API を、得意先別単価を考慮する形に見直す。
-- 売上登録 API の単価決定ロジックを共通化する。
-- 売上明細に得意先別商品単価 ID、手入力変更有無、自動取得単価を保存する。
 - 手入力単価の変更理由や承認フローが必要か検討する。
 - 得意先ランク別単価が必要か、得意先別単価の運用後に判断する。
