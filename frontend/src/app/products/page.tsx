@@ -26,24 +26,53 @@ import {
 import { useListSelectionState } from "@/lib/hooks/use-list-selection-state";
 import { cn } from "@/lib/utils/cn";
 import {
+  changeProduct,
   createProduct,
-  createProductVersion,
+  fetchProductAsOf,
+  fetchProductChanges,
   fetchProducts,
-  fetchProductVersions,
 } from "./_api";
-import { productFormSchema, productVersionFormSchema } from "./_schemas";
+import {
+  buildProductChangeKey,
+  classifyProductChange,
+  findCurrentEffectiveFrom,
+  getBusinessDate,
+  isEffectiveOnOrBeforeToday,
+  type ChangeTiming,
+} from "./_change-status";
+import { productChangeFormSchema, productFormSchema } from "./_schemas";
 import {
   taxCategories,
   taxCategoryLabels,
+  type ProductChange,
+  type ProductChangeFormValues,
   type ProductFormValues,
-  type ProductListItem,
   type ProductSearchParams,
-  type ProductVersionFormValues,
+  type ProductSummary,
 } from "./_types";
 
 type DiscontinuedFilter = "all" | "active" | "discontinued";
 
-const today = () => new Date().toISOString().slice(0, 10);
+type ProductChangesResult = {
+  readonly productId?: number;
+  readonly items: ProductChange[];
+};
+
+type ProductAsOfResult = {
+  readonly productId?: number;
+  readonly asOf?: string;
+  readonly item?: ProductSummary;
+};
+
+type ProductAsOfError = {
+  readonly productId?: number;
+  readonly asOf?: string;
+  readonly message: string;
+};
+
+type ProductLoadOptions = {
+  readonly preserveSelectionOnError?: boolean;
+};
 
 const formatDate = (value: string) =>
   new Intl.DateTimeFormat("ja-JP", {
@@ -78,18 +107,18 @@ const defaultProductValues = (): ProductFormValues => ({
   standardUnitPrice: "",
   taxCategory: "STANDARD",
   isDiscontinued: false,
-  validFrom: today(),
+  effectiveFrom: getBusinessDate(),
 });
 
-const defaultVersionValues = (
-  product?: ProductListItem,
-): ProductVersionFormValues => ({
+const defaultChangeValues = (
+  product?: ProductSummary,
+): ProductChangeFormValues => ({
   name: product?.name ?? "",
   unit: product?.unit ?? "個",
   standardUnitPrice: product ? String(product.standardUnitPrice) : "",
   taxCategory: product?.taxCategory ?? "STANDARD",
   isDiscontinued: product?.isDiscontinued ?? false,
-  validFrom: today(),
+  effectiveFrom: getBusinessDate(),
 });
 
 const authLabels: Record<DummyAuthMode, string> = {
@@ -98,11 +127,36 @@ const authLabels: Record<DummyAuthMode, string> = {
   logout: "ログアウト",
 };
 
-function ProductStatusBadge({ product }: { readonly product: ProductListItem }) {
+const changeTimingLabels: Record<ChangeTiming, string> = {
+  current: "現在適用中",
+  future: "将来適用予定",
+  past: "過去の変更",
+};
+
+const changeTimingTones: Record<
+  ChangeTiming,
+  "success" | "warning" | "neutral"
+> = {
+  current: "success",
+  future: "warning",
+  past: "neutral",
+};
+
+function ProductStatusBadge({
+  product,
+}: {
+  readonly product: { readonly isDiscontinued: boolean };
+}) {
   return product.isDiscontinued ? (
     <Badge tone="danger">販売停止</Badge>
   ) : (
     <Badge tone="success">販売中</Badge>
+  );
+}
+
+function ChangeTimingBadge({ timing }: { readonly timing: ChangeTiming }) {
+  return (
+    <Badge tone={changeTimingTones[timing]}>{changeTimingLabels[timing]}</Badge>
   );
 }
 
@@ -115,6 +169,21 @@ function FieldError({ message }: { readonly message?: string }) {
 const errorMessage = (message: unknown) =>
   typeof message === "string" ? message : undefined;
 
+const applyFieldErrors = <T extends Record<string, unknown>>(
+  error: unknown,
+  form: UseFormReturn<T>,
+) => {
+  if (!isApiError(error)) {
+    return;
+  }
+
+  Object.entries(error.fieldErrors).forEach(([field, messages]) => {
+    form.setError(field[0].toLowerCase() + field.slice(1) as Path<T>, {
+      message: messages[0],
+    });
+  });
+};
+
 export default function ProductsPage() {
   const [authMode, setAuthMode] = useState<DummyAuthMode>(() =>
     getDummyAuthMode()
@@ -123,75 +192,152 @@ export default function ProductsPage() {
   const [name, setName] = useState("");
   const [discontinuedFilter, setDiscontinuedFilter] =
     useState<DiscontinuedFilter>("all");
-  const [versions, setVersions] = useState<ProductListItem[]>([]);
-  const versionsRequestIdRef = useRef(0);
+  const changesRequestIdRef = useRef(0);
+  const [changesResult, setChangesResult] = useState<ProductChangesResult>({
+    items: [],
+  });
+  const [asOfDate, setAsOfDate] = useState(getBusinessDate());
+  const asOfDateRef = useRef(asOfDate);
+  const asOfRequestIdRef = useRef(0);
+  const [asOfResult, setAsOfResult] = useState<ProductAsOfResult>({});
   const [formError, setFormError] = useState("");
+  const [asOfErrorState, setAsOfErrorState] = useState<ProductAsOfError>({
+    message: "",
+  });
   const [successMessage, setSuccessMessage] = useState("");
-  const [loadingVersionsProductId, setLoadingVersionsProductId] =
+  const [loadingChangesProductId, setLoadingChangesProductId] =
     useState<number>();
+  const [loadingAsOfKey, setLoadingAsOfKey] = useState<{
+    readonly productId: number;
+    readonly asOf: string;
+  }>();
 
   const productForm = useForm<ProductFormValues>({
     resolver: zodResolver(productFormSchema),
     defaultValues: defaultProductValues(),
   });
 
-  const versionForm = useForm<ProductVersionFormValues>({
-    resolver: zodResolver(productVersionFormSchema),
-    defaultValues: defaultVersionValues(),
+  const changeForm = useForm<ProductChangeFormValues>({
+    resolver: zodResolver(productChangeFormSchema),
+    defaultValues: defaultChangeValues(),
   });
+
+  const clearSelectedProductState = () => {
+    setChangesResult({ items: [] });
+    setAsOfResult({});
+    setAsOfErrorState({ message: "" });
+  };
 
   const {
     error: listError,
     isLoading: isLoadingProducts,
     items: products,
     loadItems: loadProductItems,
+    replaceItems: replaceProducts,
     selectedId: selectedProductId,
     selectedIdRef: selectedProductIdRef,
     selectedItem: selectedProduct,
     selectId: setSelectedProductId,
     setError: setListError,
-  } = useListSelectionState<ProductListItem, number>({
+  } = useListSelectionState<ProductSummary, number>({
     getId: (product) => product.productId,
-    onSelectionChange: () => setVersions([]),
+    onSelectionChange: clearSelectedProductState,
   });
 
-  const loadProducts = async (params = buildSearchParams(
-    productCode,
-    name,
-    discontinuedFilter,
-  )) => loadProductItems(() => fetchProducts(params));
+  const changes =
+    changesResult.productId === selectedProductId ? changesResult.items : [];
+  const asOfProduct =
+    asOfResult.productId === selectedProductId
+    && asOfResult.asOf === asOfDate
+      ? asOfResult.item
+      : undefined;
+  const asOfError =
+    asOfErrorState.productId === selectedProductId
+    && asOfErrorState.asOf === asOfDate
+      ? asOfErrorState.message
+      : "";
+  const isLoadingChanges =
+    selectedProductId !== undefined
+    && loadingChangesProductId === selectedProductId;
+  const isLoadingAsOf =
+    selectedProductId !== undefined
+    && loadingAsOfKey?.productId === selectedProductId
+    && loadingAsOfKey?.asOf === asOfDate;
+  const businessDate = getBusinessDate();
+  const currentEffectiveFrom = findCurrentEffectiveFrom(changes, businessDate);
 
-  const loadVersions = async (productId: number) => {
-    const requestId = versionsRequestIdRef.current + 1;
-    versionsRequestIdRef.current = requestId;
-    setLoadingVersionsProductId(productId);
+  const changeAsOfDate = (nextAsOfDate: string) => {
+    asOfDateRef.current = nextAsOfDate;
+    setAsOfDate(nextAsOfDate);
+  };
+
+  const loadProducts = async (
+    params = buildSearchParams(productCode, name, discontinuedFilter),
+    options: ProductLoadOptions = {},
+  ) => loadProductItems(() => fetchProducts(params), options);
+
+  const loadChanges = async (productId: number) => {
+    const requestId = changesRequestIdRef.current + 1;
+    changesRequestIdRef.current = requestId;
+    setLoadingChangesProductId(productId);
 
     try {
-      const nextVersions = await fetchProductVersions(productId);
+      const nextChanges = await fetchProductChanges(productId);
       if (
-        versionsRequestIdRef.current === requestId
+        changesRequestIdRef.current === requestId
         && selectedProductIdRef.current === productId
       ) {
-        setVersions(nextVersions);
+        setChangesResult({ productId, items: nextChanges });
       }
     } catch (error) {
       if (
-        versionsRequestIdRef.current === requestId
+        changesRequestIdRef.current === requestId
         && selectedProductIdRef.current === productId
       ) {
         setListError(formatApiError(error));
-        setVersions([]);
+        setChangesResult({ productId, items: [] });
       }
     } finally {
-      if (versionsRequestIdRef.current === requestId) {
-        setLoadingVersionsProductId(undefined);
+      if (changesRequestIdRef.current === requestId) {
+        setLoadingChangesProductId(undefined);
       }
     }
   };
 
-  const isLoadingVersions =
-    selectedProductId !== undefined
-    && loadingVersionsProductId === selectedProductId;
+  const loadAsOf = async (productId: number, targetAsOf: string) => {
+    const requestId = asOfRequestIdRef.current + 1;
+    asOfRequestIdRef.current = requestId;
+    setLoadingAsOfKey({ productId, asOf: targetAsOf });
+    setAsOfErrorState({ message: "" });
+
+    try {
+      const nextAsOf = await fetchProductAsOf(productId, targetAsOf);
+      if (
+        asOfRequestIdRef.current === requestId
+        && selectedProductIdRef.current === productId
+        && asOfDateRef.current === targetAsOf
+      ) {
+        setAsOfResult({ productId, asOf: targetAsOf, item: nextAsOf });
+      }
+    } catch (error) {
+      if (
+        asOfRequestIdRef.current === requestId
+        && selectedProductIdRef.current === productId
+        && asOfDateRef.current === targetAsOf
+      ) {
+        setAsOfResult({ productId, asOf: targetAsOf });
+        setAsOfErrorState({
+          productId,
+          asOf: targetAsOf,
+          message: formatApiError(error),
+        });
+      }
+    } finally {
+      if (asOfRequestIdRef.current === requestId) {
+        setLoadingAsOfKey(undefined);
+      }
+    }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadProducts({}), 0);
@@ -202,18 +348,18 @@ export default function ProductsPage() {
 
   useEffect(() => {
     if (selectedProductId === undefined) {
-      versionForm.reset(defaultVersionValues());
+      changeForm.reset(defaultChangeValues());
       return;
     }
 
     const product = products.find((item) => item.productId === selectedProductId);
-    versionForm.reset(defaultVersionValues(product));
-    const timer = window.setTimeout(
-      () => void loadVersions(selectedProductId),
-      0,
-    );
+    changeForm.reset(defaultChangeValues(product));
+    const timer = window.setTimeout(() => {
+      void loadChanges(selectedProductId);
+      void loadAsOf(selectedProductId, asOfDate);
+    }, 0);
     return () => window.clearTimeout(timer);
-    // 選択商品の変更に合わせて履歴フォームを現在値で初期化する。
+    // 選択商品の変更に合わせて変更フォームと指定日参照を更新する。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProductId]);
 
@@ -237,23 +383,37 @@ export default function ProductsPage() {
       const created = await createProduct(values);
       productForm.reset(defaultProductValues());
       setSuccessMessage("商品を登録し、一覧を更新しました。");
-      await loadProducts();
-      setSelectedProductId(created.productId);
+      setProductCode("");
+      setName("");
+      const loadResult = await loadProducts({});
+      if (!loadResult.ok) {
+        setSuccessMessage("商品を登録しました。一覧の再読込に失敗しました。");
+        return;
+      }
+
+      const nextProducts = loadResult.items;
+      if (
+        isEffectiveOnOrBeforeToday(created.effectiveFrom)
+        && !nextProducts.some((product) => product.productId === created.productId)
+      ) {
+        replaceProducts([created, ...nextProducts], {
+          preferredSelectedId: created.productId,
+        });
+        return;
+      }
+
+      if (nextProducts.some((product) => product.productId === created.productId)) {
+        setSelectedProductId(created.productId);
+      }
     } catch (error) {
       setFormError(formatApiError(error));
-      if (isApiError(error)) {
-        Object.entries(error.fieldErrors).forEach(([field, messages]) => {
-          productForm.setError(field[0].toLowerCase() + field.slice(1) as keyof ProductFormValues, {
-            message: messages[0],
-          });
-        });
-      }
+      applyFieldErrors(error, productForm);
     }
   };
 
-  const submitVersion = async (values: ProductVersionFormValues) => {
+  const submitChange = async (values: ProductChangeFormValues) => {
     if (!selectedProduct) {
-      setFormError("履歴を追加する商品を一覧から選択してください。");
+      setFormError("情報を変更する商品を一覧から選択してください。");
       return;
     }
 
@@ -261,20 +421,35 @@ export default function ProductsPage() {
     setSuccessMessage("");
 
     try {
-      await createProductVersion(selectedProduct.productId, values);
-      setSuccessMessage("商品履歴を追加し、一覧と履歴を更新しました。");
-      await loadProducts();
-      await loadVersions(selectedProduct.productId);
+      await changeProduct(selectedProduct.productId, values);
+      const loadResult = await loadProducts(
+        buildSearchParams(productCode, name, discontinuedFilter),
+        { preserveSelectionOnError: true },
+      );
+      setSuccessMessage(
+        loadResult.ok
+          ? "商品情報を変更し、一覧と変更履歴を更新しました。"
+          : "商品情報を変更しました。一覧の再読込に失敗しました。",
+      );
+      await loadChanges(selectedProduct.productId);
+      await loadAsOf(selectedProduct.productId, asOfDate);
     } catch (error) {
       setFormError(formatApiError(error));
-      if (isApiError(error)) {
-        Object.entries(error.fieldErrors).forEach(([field, messages]) => {
-          versionForm.setError(field[0].toLowerCase() + field.slice(1) as keyof ProductVersionFormValues, {
-            message: messages[0],
-          });
-        });
-      }
+      applyFieldErrors(error, changeForm);
     }
+  };
+
+  const submitAsOf = () => {
+    if (!selectedProduct) {
+      setAsOfErrorState({
+        productId: undefined,
+        asOf: asOfDate,
+        message: "参照する商品を一覧から選択してください。",
+      });
+      return;
+    }
+
+    void loadAsOf(selectedProduct.productId, asOfDate);
   };
 
   return (
@@ -313,7 +488,7 @@ export default function ProductsPage() {
           </nav>
           <h1 className="mt-1.5">商品マスタ</h1>
           <p>
-            商品の現在値と履歴を確認し、変更は既存行の更新ではなく新しい履歴として追加します。
+            商品の現在情報と変更履歴を確認し、指定日から商品情報を変更します。
           </p>
         </div>
 
@@ -322,9 +497,9 @@ export default function ProductsPage() {
             {successMessage}
           </Alert>
         ) : null}
-        {listError || formError ? (
+        {listError || formError || asOfError ? (
           <Alert className="py-2" title="エラーを確認してください" tone="danger">
-            {[listError, formError].filter(Boolean).join(" ")}
+            {[listError, formError, asOfError].filter(Boolean).join(" ")}
           </Alert>
         ) : null}
 
@@ -387,7 +562,7 @@ export default function ProductsPage() {
             <div className="result-heading">
               <div>
                 <h2 id="list-heading">商品一覧</h2>
-                <p>標準単価は得意先別商品単価がない場合のフォールバック単価です。</p>
+                <p>一覧は本日時点で適用される商品情報を表示します。</p>
               </div>
               <Badge tone="neutral">{products.length} 件</Badge>
             </div>
@@ -428,7 +603,7 @@ export default function ProductsPage() {
                         <td>
                           <ProductStatusBadge product={product} />
                         </td>
-                        <td>{formatDate(product.validFrom)}</td>
+                        <td>{formatDate(product.effectiveFrom)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -470,14 +645,12 @@ export default function ProductsPage() {
                   {selectedProduct.taxCategory})
                 </dd>
                 <dt>適用開始日</dt>
-                <dd>{formatDate(selectedProduct.validFrom)}</dd>
-                <dt>商品ID</dt>
-                <dd className="font-mono">{selectedProduct.productId}</dd>
+                <dd>{formatDate(selectedProduct.effectiveFrom)}</dd>
               </dl>
             ) : (
               <div className="selected-empty">
                 <p>未選択</p>
-                <span>商品一覧から行を選択すると現在値を表示します。</span>
+                <span>商品一覧から行を選択すると現在の商品情報を表示します。</span>
               </div>
             )}
             {selectedProduct ? (
@@ -495,7 +668,7 @@ export default function ProductsPage() {
           <section className="surface section-pad" aria-labelledby="create-heading">
             <div className="section-heading">
               <h2 id="create-heading">商品新規登録</h2>
-              <p>商品本体と初回の商品履歴を同時に登録します。</p>
+              <p>商品本体と初回の商品情報を同時に登録します。</p>
             </div>
             <form
               className="grid gap-4"
@@ -512,7 +685,7 @@ export default function ProductsPage() {
                   />
                   <FieldError message={productForm.formState.errors.productCode?.message} />
                 </label>
-                <ProductVersionFields form={productForm} />
+                <ProductChangeFields form={productForm} />
               </div>
               <Button disabled={productForm.formState.isSubmitting} type="submit">
                 {productForm.formState.isSubmitting ? (
@@ -525,106 +698,169 @@ export default function ProductsPage() {
             </form>
           </section>
 
-          <section className="surface section-pad" aria-labelledby="version-heading">
+          <section className="surface section-pad" aria-labelledby="change-heading">
             <div className="section-heading">
-              <h2 id="version-heading">商品履歴追加</h2>
+              <h2 id="change-heading">商品情報変更</h2>
               <p>
                 {selectedProduct
-                  ? `${selectedProduct.productCode} に新しい履歴を追加します。`
-                  : "商品一覧から商品を選択すると履歴を追加できます。"}
+                  ? `${selectedProduct.productCode} の情報を指定日から変更します。`
+                  : "商品一覧から商品を選択すると情報を変更できます。"}
               </p>
             </div>
             {selectedProduct ? (
               <form
                 className="grid gap-4"
                 onSubmit={(event) => {
-                  void versionForm.handleSubmit(submitVersion)(event);
+                  void changeForm.handleSubmit(submitChange)(event);
                 }}
               >
                 <fieldset
                   className="grid gap-4 sm:grid-cols-2"
-                  disabled={!selectedProduct || versionForm.formState.isSubmitting}
+                  disabled={!selectedProduct || changeForm.formState.isSubmitting}
                 >
-                  <ProductVersionFields form={versionForm} />
+                  <ProductChangeFields form={changeForm} />
                 </fieldset>
                 <Button
-                  disabled={!selectedProduct || versionForm.formState.isSubmitting}
+                  disabled={!selectedProduct || changeForm.formState.isSubmitting}
                   type="submit"
                 >
-                  {versionForm.formState.isSubmitting ? (
+                  {changeForm.formState.isSubmitting ? (
                     <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
                   ) : (
                     <Plus aria-hidden="true" className="size-4" />
                   )}
-                  履歴追加
+                  変更を登録
                 </Button>
               </form>
             ) : (
               <div className="form-empty-state">
                 <p>商品未選択</p>
-                <span>一覧で対象商品を選択してから履歴を追加します。</span>
+                <span>一覧で対象商品を選択してから情報を変更します。</span>
               </div>
             )}
           </section>
         </div>
 
-        <section className="surface section-pad" aria-labelledby="history-heading">
-          <div className="section-heading">
-            <h2 id="history-heading">商品履歴</h2>
-            <p>同じ商品 ID の履歴を適用開始日の新しい順で表示します。</p>
-          </div>
-          {isLoadingVersions ? (
-            <p className="flex items-center gap-2 text-sm font-semibold text-slate-600">
-              <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-              履歴を読み込み中
-            </p>
-          ) : null}
-          <div className="overflow-x-auto">
-            <table className="data-table text-left">
-              <thead>
-                <tr>
-                  <th>履歴ID</th>
-                  <th>商品名</th>
-                  <th>単位</th>
-                  <th className="text-right">標準単価</th>
-                  <th>税区分</th>
-                  <th>状態</th>
-                  <th>適用開始日</th>
-                </tr>
-              </thead>
-              <tbody>
-                {versions.map((version) => (
-                  <tr key={version.productVersionId}>
-                    <td className="font-mono text-slate-700">
-                      {version.productVersionId}
-                    </td>
-                    <td className="font-semibold">{version.name}</td>
-                    <td>{version.unit}</td>
-                    <td className="text-right font-mono">
-                      {formatMoney(version.standardUnitPrice)} 円
-                    </td>
-                    <td>{taxCategoryLabels[version.taxCategory]}</td>
-                    <td>
-                      <ProductStatusBadge product={version} />
-                    </td>
-                    <td>{formatDate(version.validFrom)}</td>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+          <section className="surface section-pad" aria-labelledby="asof-heading">
+            <div className="section-heading">
+              <h2 id="asof-heading">指定日時点の商品情報</h2>
+              <p>対象日以前で一番新しい商品情報を確認します。</p>
+            </div>
+            <div className="grid gap-3">
+              <label className="grid gap-1.5 text-sm font-semibold">
+                参照日
+                <Input
+                  type="date"
+                  value={asOfDate}
+                  onChange={(event) => changeAsOfDate(event.target.value)}
+                />
+              </label>
+              <Button
+                disabled={!selectedProduct || isLoadingAsOf}
+                onClick={submitAsOf}
+                type="button"
+                variant="secondary"
+              >
+                {isLoadingAsOf ? (
+                  <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+                ) : (
+                  <Search aria-hidden="true" className="size-4" />
+                )}
+                参照
+              </Button>
+              {asOfProduct ? (
+                <dl className="selected-summary-list">
+                  <dt>商品名</dt>
+                  <dd>{asOfProduct.name}</dd>
+                  <dt>単位</dt>
+                  <dd>{asOfProduct.unit}</dd>
+                  <dt>標準単価</dt>
+                  <dd>{formatMoney(asOfProduct.standardUnitPrice)} 円</dd>
+                  <dt>税区分</dt>
+                  <dd>{taxCategoryLabels[asOfProduct.taxCategory]}</dd>
+                  <dt>状態</dt>
+                  <dd>
+                    <ProductStatusBadge product={asOfProduct} />
+                  </dd>
+                  <dt>適用開始日</dt>
+                  <dd>{formatDate(asOfProduct.effectiveFrom)}</dd>
+                </dl>
+              ) : (
+                <div className="selected-empty">
+                  <p>参照結果なし</p>
+                  <span>商品と参照日を指定して確認します。</span>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="surface section-pad" aria-labelledby="history-heading">
+            <div className="section-heading">
+              <h2 id="history-heading">変更履歴</h2>
+              <p>
+                同じ商品の変更を適用開始日の新しい順で表示します。将来適用予定も含みます。
+              </p>
+            </div>
+            {isLoadingChanges ? (
+              <p className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+                <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+                変更履歴を読み込み中
+              </p>
+            ) : null}
+            <div className="overflow-x-auto">
+              <table className="data-table text-left">
+                <thead>
+                  <tr>
+                    <th>状態</th>
+                    <th>商品名</th>
+                    <th>単位</th>
+                    <th className="text-right">標準単価</th>
+                    <th>税区分</th>
+                    <th>販売状態</th>
+                    <th>適用開始日</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {!isLoadingVersions && versions.length === 0 ? (
-            <p className="mt-4 text-sm font-semibold text-slate-500">
-              履歴データなし
-            </p>
-          ) : null}
-        </section>
+                </thead>
+                <tbody>
+                  {changes.map((change) => (
+                    <tr key={buildProductChangeKey(change)}>
+                      <td>
+                        <ChangeTimingBadge
+                          timing={classifyProductChange(
+                            change,
+                            businessDate,
+                            currentEffectiveFrom,
+                          )}
+                        />
+                      </td>
+                      <td className="font-semibold">{change.name}</td>
+                      <td>{change.unit}</td>
+                      <td className="text-right font-mono">
+                        {formatMoney(change.standardUnitPrice)} 円
+                      </td>
+                      <td>{taxCategoryLabels[change.taxCategory]}</td>
+                      <td>
+                        <ProductStatusBadge product={change} />
+                      </td>
+                      <td>{formatDate(change.effectiveFrom)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!isLoadingChanges && changes.length === 0 ? (
+              <p className="mt-4 text-sm font-semibold text-slate-500">
+                変更履歴なし
+              </p>
+            ) : null}
+          </section>
+        </div>
       </div>
     </main>
   );
 }
 
-function ProductVersionFields<T extends ProductVersionFormValues>({
+function ProductChangeFields<T extends ProductChangeFormValues>({
   form,
 }: {
   readonly form: UseFormReturn<T>;
@@ -634,7 +870,7 @@ function ProductVersionFields<T extends ProductVersionFormValues>({
   const unitPath = "unit" as Path<T>;
   const standardUnitPricePath = "standardUnitPrice" as Path<T>;
   const taxCategoryPath = "taxCategory" as Path<T>;
-  const validFromPath = "validFrom" as Path<T>;
+  const effectiveFromPath = "effectiveFrom" as Path<T>;
   const isDiscontinuedPath = "isDiscontinued" as Path<T>;
 
   return (
@@ -681,11 +917,14 @@ function ProductVersionFields<T extends ProductVersionFormValues>({
       <label className="grid gap-1.5 text-sm font-semibold">
         適用開始日
         <Input
-          hasError={Boolean(errors.validFrom)}
+          hasError={Boolean(errors.effectiveFrom)}
           type="date"
-          {...form.register(validFromPath)}
+          {...form.register(effectiveFromPath)}
         />
-        <FieldError message={errorMessage(errors.validFrom?.message)} />
+        <span className="text-xs font-medium text-slate-500">
+          適用開始日は、変更が反映される日です。
+        </span>
+        <FieldError message={errorMessage(errors.effectiveFrom?.message)} />
       </label>
       <label className="flex min-h-10 items-center gap-2 text-sm font-semibold">
         <input

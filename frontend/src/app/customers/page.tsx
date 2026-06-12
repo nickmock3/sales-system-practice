@@ -26,48 +26,48 @@ import {
 import { useListSelectionState } from "@/lib/hooks/use-list-selection-state";
 import { cn } from "@/lib/utils/cn";
 import {
+  changeCustomer,
   createCustomer,
-  createCustomerVersion,
+  fetchCustomerAsOf,
+  fetchCustomerChanges,
   fetchCustomers,
-  fetchCustomerVersions,
-  previewCustomer,
 } from "./_api";
-import { customerFormSchema, customerVersionFormSchema } from "./_schemas";
+import {
+  buildCustomerChangeKey,
+  classifyCustomerChange,
+  findCurrentEffectiveFrom,
+  getBusinessDate,
+  isEffectiveOnOrBeforeToday,
+  type ChangeTiming,
+} from "./_change-status";
+import { customerChangeFormSchema, customerFormSchema } from "./_schemas";
 import type {
+  CustomerChange,
+  CustomerChangeFormValues,
   CustomerFormValues,
-  CustomerListItem,
   CustomerSearchParams,
-  CustomerVersion,
-  CustomerVersionFormValues,
+  CustomerSummary,
 } from "./_types";
 
-type CustomerVersionsResult = {
+type CustomerChangesResult = {
   readonly customerId?: number;
-  readonly items: CustomerVersion[];
+  readonly items: CustomerChange[];
 };
 
-type CustomerPreviewResult = {
+type CustomerAsOfResult = {
   readonly customerId?: number;
-  readonly targetDate?: string;
-  readonly item?: CustomerVersion;
+  readonly asOf?: string;
+  readonly item?: CustomerSummary;
 };
 
-type CustomerPreviewError = {
+type CustomerAsOfError = {
   readonly customerId?: number;
-  readonly targetDate?: string;
+  readonly asOf?: string;
   readonly message: string;
 };
 
 type CustomerLoadOptions = {
   readonly preserveSelectionOnError?: boolean;
-};
-
-const today = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 };
 
 const formatDate = (value: string) =>
@@ -76,9 +76,6 @@ const formatDate = (value: string) =>
     month: "2-digit",
     day: "2-digit",
   }).format(new Date(value));
-
-const isEffectiveToday = (validFrom: string) =>
-  validFrom.slice(0, 10) <= today();
 
 const buildSearchParams = (
   customerCode: string,
@@ -93,16 +90,16 @@ const defaultCustomerValues = (): CustomerFormValues => ({
   name: "",
   address: "",
   phoneNumber: "",
-  validFrom: today(),
+  effectiveFrom: getBusinessDate(),
 });
 
-const defaultVersionValues = (
-  customer?: CustomerListItem,
-): CustomerVersionFormValues => ({
+const defaultChangeValues = (
+  customer?: CustomerSummary,
+): CustomerChangeFormValues => ({
   name: customer?.name ?? "",
   address: customer?.address ?? "",
   phoneNumber: customer?.phoneNumber ?? "",
-  validFrom: today(),
+  effectiveFrom: getBusinessDate(),
 });
 
 const authLabels: Record<DummyAuthMode, string> = {
@@ -110,6 +107,27 @@ const authLabels: Record<DummyAuthMode, string> = {
   admin: "管理者",
   logout: "ログアウト",
 };
+
+const changeTimingLabels: Record<ChangeTiming, string> = {
+  current: "現在適用中",
+  future: "将来適用予定",
+  past: "過去の変更",
+};
+
+const changeTimingTones: Record<
+  ChangeTiming,
+  "success" | "warning" | "neutral"
+> = {
+  current: "success",
+  future: "warning",
+  past: "neutral",
+};
+
+function ChangeTimingBadge({ timing }: { readonly timing: ChangeTiming }) {
+  return (
+    <Badge tone={changeTimingTones[timing]}>{changeTimingLabels[timing]}</Badge>
+  );
+}
 
 function FieldError({ message }: { readonly message?: string }) {
   return message ? (
@@ -141,23 +159,24 @@ export default function CustomersPage() {
   );
   const [customerCode, setCustomerCode] = useState("");
   const [name, setName] = useState("");
-  const versionsRequestIdRef = useRef(0);
-  const [versionsResult, setVersionsResult] = useState<CustomerVersionsResult>({
+  const changesRequestIdRef = useRef(0);
+  const [changesResult, setChangesResult] = useState<CustomerChangesResult>({
     items: [],
   });
-  const [previewDate, setPreviewDate] = useState(today());
-  const previewDateRef = useRef(previewDate);
-  const previewRequestIdRef = useRef(0);
-  const [previewResult, setPreviewResult] = useState<CustomerPreviewResult>({});
+  const [asOfDate, setAsOfDate] = useState(getBusinessDate());
+  const asOfDateRef = useRef(asOfDate);
+  const asOfRequestIdRef = useRef(0);
+  const [asOfResult, setAsOfResult] = useState<CustomerAsOfResult>({});
   const [formError, setFormError] = useState("");
-  const [previewErrorState, setPreviewErrorState] =
-    useState<CustomerPreviewError>({ message: "" });
+  const [asOfErrorState, setAsOfErrorState] = useState<CustomerAsOfError>({
+    message: "",
+  });
   const [successMessage, setSuccessMessage] = useState("");
-  const [loadingVersionsCustomerId, setLoadingVersionsCustomerId] =
+  const [loadingChangesCustomerId, setLoadingChangesCustomerId] =
     useState<number>();
-  const [loadingPreviewKey, setLoadingPreviewKey] = useState<{
+  const [loadingAsOfKey, setLoadingAsOfKey] = useState<{
     readonly customerId: number;
-    readonly targetDate: string;
+    readonly asOf: string;
   }>();
 
   const customerForm = useForm<CustomerFormValues>({
@@ -165,15 +184,15 @@ export default function CustomersPage() {
     defaultValues: defaultCustomerValues(),
   });
 
-  const versionForm = useForm<CustomerVersionFormValues>({
-    resolver: zodResolver(customerVersionFormSchema),
-    defaultValues: defaultVersionValues(),
+  const changeForm = useForm<CustomerChangeFormValues>({
+    resolver: zodResolver(customerChangeFormSchema),
+    defaultValues: defaultChangeValues(),
   });
 
   const clearSelectedCustomerState = () => {
-    setVersionsResult({ items: [] });
-    setPreviewResult({});
-    setPreviewErrorState({ message: "" });
+    setChangesResult({ items: [] });
+    setAsOfResult({});
+    setAsOfErrorState({ message: "" });
   };
 
   const {
@@ -187,34 +206,36 @@ export default function CustomersPage() {
     selectedItem: selectedCustomer,
     selectId: setSelectedCustomer,
     setError: setListError,
-  } = useListSelectionState<CustomerListItem, number>({
+  } = useListSelectionState<CustomerSummary, number>({
     getId: (customer) => customer.customerId,
     onSelectionChange: clearSelectedCustomerState,
   });
 
-  const versions =
-    versionsResult.customerId === selectedCustomerId ? versionsResult.items : [];
-  const preview =
-    previewResult.customerId === selectedCustomerId
-    && previewResult.targetDate === previewDate
-      ? previewResult.item
+  const changes =
+    changesResult.customerId === selectedCustomerId ? changesResult.items : [];
+  const asOfCustomer =
+    asOfResult.customerId === selectedCustomerId
+    && asOfResult.asOf === asOfDate
+      ? asOfResult.item
       : undefined;
-  const previewError =
-    previewErrorState.customerId === selectedCustomerId
-    && previewErrorState.targetDate === previewDate
-      ? previewErrorState.message
+  const asOfError =
+    asOfErrorState.customerId === selectedCustomerId
+    && asOfErrorState.asOf === asOfDate
+      ? asOfErrorState.message
       : "";
-  const isLoadingVersions =
+  const isLoadingChanges =
     selectedCustomerId !== undefined
-    && loadingVersionsCustomerId === selectedCustomerId;
-  const isLoadingPreview =
+    && loadingChangesCustomerId === selectedCustomerId;
+  const isLoadingAsOf =
     selectedCustomerId !== undefined
-    && loadingPreviewKey?.customerId === selectedCustomerId
-    && loadingPreviewKey?.targetDate === previewDate;
+    && loadingAsOfKey?.customerId === selectedCustomerId
+    && loadingAsOfKey?.asOf === asOfDate;
+  const businessDate = getBusinessDate();
+  const currentEffectiveFrom = findCurrentEffectiveFrom(changes, businessDate);
 
-  const changePreviewDate = (nextPreviewDate: string) => {
-    previewDateRef.current = nextPreviewDate;
-    setPreviewDate(nextPreviewDate);
+  const changeAsOfDate = (nextAsOfDate: string) => {
+    asOfDateRef.current = nextAsOfDate;
+    setAsOfDate(nextAsOfDate);
   };
 
   const loadCustomers = async (
@@ -222,65 +243,65 @@ export default function CustomersPage() {
     options: CustomerLoadOptions = {},
   ) => loadCustomerItems(() => fetchCustomers(params), options);
 
-  const loadVersions = async (customerId: number) => {
-    const requestId = versionsRequestIdRef.current + 1;
-    versionsRequestIdRef.current = requestId;
-    setLoadingVersionsCustomerId(customerId);
+  const loadChanges = async (customerId: number) => {
+    const requestId = changesRequestIdRef.current + 1;
+    changesRequestIdRef.current = requestId;
+    setLoadingChangesCustomerId(customerId);
 
     try {
-      const nextVersions = await fetchCustomerVersions(customerId);
+      const nextChanges = await fetchCustomerChanges(customerId);
       if (
-        versionsRequestIdRef.current === requestId
+        changesRequestIdRef.current === requestId
         && selectedCustomerIdRef.current === customerId
       ) {
-        setVersionsResult({ customerId, items: nextVersions });
+        setChangesResult({ customerId, items: nextChanges });
       }
     } catch (error) {
       if (
-        versionsRequestIdRef.current === requestId
+        changesRequestIdRef.current === requestId
         && selectedCustomerIdRef.current === customerId
       ) {
         setListError(formatApiError(error));
-        setVersionsResult({ customerId, items: [] });
+        setChangesResult({ customerId, items: [] });
       }
     } finally {
-      if (versionsRequestIdRef.current === requestId) {
-        setLoadingVersionsCustomerId(undefined);
+      if (changesRequestIdRef.current === requestId) {
+        setLoadingChangesCustomerId(undefined);
       }
     }
   };
 
-  const loadPreview = async (customerId: number, targetDate: string) => {
-    const requestId = previewRequestIdRef.current + 1;
-    previewRequestIdRef.current = requestId;
-    setLoadingPreviewKey({ customerId, targetDate });
-    setPreviewErrorState({ message: "" });
+  const loadAsOf = async (customerId: number, targetAsOf: string) => {
+    const requestId = asOfRequestIdRef.current + 1;
+    asOfRequestIdRef.current = requestId;
+    setLoadingAsOfKey({ customerId, asOf: targetAsOf });
+    setAsOfErrorState({ message: "" });
 
     try {
-      const nextPreview = await previewCustomer({ customerId, targetDate });
+      const nextAsOf = await fetchCustomerAsOf(customerId, targetAsOf);
       if (
-        previewRequestIdRef.current === requestId
+        asOfRequestIdRef.current === requestId
         && selectedCustomerIdRef.current === customerId
-        && previewDateRef.current === targetDate
+        && asOfDateRef.current === targetAsOf
       ) {
-        setPreviewResult({ customerId, targetDate, item: nextPreview });
+        setAsOfResult({ customerId, asOf: targetAsOf, item: nextAsOf });
       }
     } catch (error) {
       if (
-        previewRequestIdRef.current === requestId
+        asOfRequestIdRef.current === requestId
         && selectedCustomerIdRef.current === customerId
-        && previewDateRef.current === targetDate
+        && asOfDateRef.current === targetAsOf
       ) {
-        setPreviewResult({ customerId, targetDate });
-        setPreviewErrorState({
+        setAsOfResult({ customerId, asOf: targetAsOf });
+        setAsOfErrorState({
           customerId,
-          targetDate,
+          asOf: targetAsOf,
           message: formatApiError(error),
         });
       }
     } finally {
-      if (previewRequestIdRef.current === requestId) {
-        setLoadingPreviewKey(undefined);
+      if (asOfRequestIdRef.current === requestId) {
+        setLoadingAsOfKey(undefined);
       }
     }
   };
@@ -294,20 +315,20 @@ export default function CustomersPage() {
 
   useEffect(() => {
     if (selectedCustomerId === undefined) {
-      versionForm.reset(defaultVersionValues());
+      changeForm.reset(defaultChangeValues());
       return;
     }
 
     const customer = customers.find(
       (item) => item.customerId === selectedCustomerId,
     );
-    versionForm.reset(defaultVersionValues(customer));
+    changeForm.reset(defaultChangeValues(customer));
     const timer = window.setTimeout(() => {
-      void loadVersions(selectedCustomerId);
-      void loadPreview(selectedCustomerId, previewDate);
+      void loadChanges(selectedCustomerId);
+      void loadAsOf(selectedCustomerId, asOfDate);
     }, 0);
     return () => window.clearTimeout(timer);
-    // 選択得意先の変更に合わせて履歴フォームとプレビューを更新する。
+    // 選択得意先の変更に合わせて変更フォームと指定日参照を更新する。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId]);
 
@@ -341,7 +362,7 @@ export default function CustomersPage() {
 
       const nextCustomers = loadResult.items;
       if (
-        isEffectiveToday(created.validFrom)
+        isEffectiveOnOrBeforeToday(created.effectiveFrom)
         && !nextCustomers.some((customer) => customer.customerId === created.customerId)
       ) {
         replaceCustomers([created, ...nextCustomers], {
@@ -359,9 +380,9 @@ export default function CustomersPage() {
     }
   };
 
-  const submitVersion = async (values: CustomerVersionFormValues) => {
+  const submitChange = async (values: CustomerChangeFormValues) => {
     if (!selectedCustomer) {
-      setFormError("履歴を追加する得意先を一覧から選択してください。");
+      setFormError("情報を変更する得意先を一覧から選択してください。");
       return;
     }
 
@@ -369,35 +390,35 @@ export default function CustomersPage() {
     setSuccessMessage("");
 
     try {
-      await createCustomerVersion(selectedCustomer.customerId, values);
+      await changeCustomer(selectedCustomer.customerId, values);
       const loadResult = await loadCustomers(
         buildSearchParams(customerCode, name),
         { preserveSelectionOnError: true },
       );
       setSuccessMessage(
         loadResult.ok
-          ? "得意先履歴を追加し、一覧と履歴を更新しました。"
-          : "得意先履歴を追加しました。一覧の再読込に失敗しました。",
+          ? "得意先情報を変更し、一覧と変更履歴を更新しました。"
+          : "得意先情報を変更しました。一覧の再読込に失敗しました。",
       );
-      await loadVersions(selectedCustomer.customerId);
-      await loadPreview(selectedCustomer.customerId, previewDate);
+      await loadChanges(selectedCustomer.customerId);
+      await loadAsOf(selectedCustomer.customerId, asOfDate);
     } catch (error) {
       setFormError(formatApiError(error));
-      applyFieldErrors(error, versionForm);
+      applyFieldErrors(error, changeForm);
     }
   };
 
-  const submitPreview = () => {
+  const submitAsOf = () => {
     if (!selectedCustomer) {
-      setPreviewErrorState({
+      setAsOfErrorState({
         customerId: undefined,
-        targetDate: previewDate,
-        message: "プレビューする得意先を一覧から選択してください。",
+        asOf: asOfDate,
+        message: "参照する得意先を一覧から選択してください。",
       });
       return;
     }
 
-    void loadPreview(selectedCustomer.customerId, previewDate);
+    void loadAsOf(selectedCustomer.customerId, asOfDate);
   };
 
   return (
@@ -436,7 +457,7 @@ export default function CustomersPage() {
           </nav>
           <h1 className="mt-1.5">得意先マスタ</h1>
           <p>
-            得意先の現在値と履歴を確認し、名称や連絡先の変更は新しい履歴として追加します。
+            得意先の現在情報と変更履歴を確認し、指定日から得意先情報を変更します。
           </p>
         </div>
 
@@ -445,9 +466,9 @@ export default function CustomersPage() {
             {successMessage}
           </Alert>
         ) : null}
-        {listError || formError || previewError ? (
+        {listError || formError || asOfError ? (
           <Alert className="py-2" title="エラーを確認してください" tone="danger">
-            {[listError, formError, previewError].filter(Boolean).join(" ")}
+            {[listError, formError, asOfError].filter(Boolean).join(" ")}
           </Alert>
         ) : null}
 
@@ -496,7 +517,7 @@ export default function CustomersPage() {
             <div className="result-heading">
               <div>
                 <h2 id="list-heading">得意先一覧</h2>
-                <p>一覧は本日時点で適用される得意先履歴の内容を表示します。</p>
+                <p>一覧は本日時点で適用される得意先情報を表示します。</p>
               </div>
               <Badge tone="neutral">{customers.length} 件</Badge>
             </div>
@@ -529,7 +550,7 @@ export default function CustomersPage() {
                         <td className="font-semibold">{customer.name}</td>
                         <td>{customer.address}</td>
                         <td className="font-mono">{customer.phoneNumber}</td>
-                        <td>{formatDate(customer.validFrom)}</td>
+                        <td>{formatDate(customer.effectiveFrom)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -553,7 +574,6 @@ export default function CustomersPage() {
           <section className="surface selected-summary" aria-labelledby="detail-heading">
             <div className="selected-summary-heading">
               <h2 id="detail-heading">選択中の得意先</h2>
-              {selectedCustomer ? <Badge tone="success">現在履歴</Badge> : null}
             </div>
             {selectedCustomer ? (
               <dl className="selected-summary-list">
@@ -566,14 +586,12 @@ export default function CustomersPage() {
                 <dt>電話番号</dt>
                 <dd className="font-mono">{selectedCustomer.phoneNumber}</dd>
                 <dt>適用開始日</dt>
-                <dd>{formatDate(selectedCustomer.validFrom)}</dd>
-                <dt>得意先ID</dt>
-                <dd className="font-mono">{selectedCustomer.customerId}</dd>
+                <dd>{formatDate(selectedCustomer.effectiveFrom)}</dd>
               </dl>
             ) : (
               <div className="selected-empty">
                 <p>未選択</p>
-                <span>得意先一覧から行を選択すると現在値を表示します。</span>
+                <span>得意先一覧から行を選択すると現在の得意先情報を表示します。</span>
               </div>
             )}
             {selectedCustomer ? (
@@ -591,7 +609,7 @@ export default function CustomersPage() {
           <section className="surface section-pad" aria-labelledby="create-heading">
             <div className="section-heading">
               <h2 id="create-heading">得意先新規登録</h2>
-              <p>得意先本体と初回の得意先履歴を同時に登録します。</p>
+              <p>得意先本体と初回の得意先情報を同時に登録します。</p>
             </div>
             <form
               className="grid gap-4"
@@ -610,7 +628,7 @@ export default function CustomersPage() {
                     message={customerForm.formState.errors.customerCode?.message}
                   />
                 </label>
-                <CustomerVersionFields form={customerForm} />
+                <CustomerChangeFields form={customerForm} />
               </div>
               <Button disabled={customerForm.formState.isSubmitting} type="submit">
                 {customerForm.formState.isSubmitting ? (
@@ -623,94 +641,92 @@ export default function CustomersPage() {
             </form>
           </section>
 
-          <section className="surface section-pad" aria-labelledby="version-heading">
+          <section className="surface section-pad" aria-labelledby="change-heading">
             <div className="section-heading">
-              <h2 id="version-heading">得意先履歴追加</h2>
+              <h2 id="change-heading">得意先情報変更</h2>
               <p>
                 {selectedCustomer
-                  ? `${selectedCustomer.customerCode} に新しい履歴を追加します。`
-                  : "得意先一覧から得意先を選択すると履歴を追加できます。"}
+                  ? `${selectedCustomer.customerCode} の情報を指定日から変更します。`
+                  : "得意先一覧から得意先を選択すると情報を変更できます。"}
               </p>
             </div>
             {selectedCustomer ? (
               <form
                 className="grid gap-4"
                 onSubmit={(event) => {
-                  void versionForm.handleSubmit(submitVersion)(event);
+                  void changeForm.handleSubmit(submitChange)(event);
                 }}
               >
                 <fieldset
                   className="grid gap-4 sm:grid-cols-2"
-                  disabled={!selectedCustomer || versionForm.formState.isSubmitting}
+                  disabled={!selectedCustomer || changeForm.formState.isSubmitting}
                 >
-                  <CustomerVersionFields form={versionForm} />
+                  <CustomerChangeFields form={changeForm} />
                 </fieldset>
                 <Button
-                  disabled={!selectedCustomer || versionForm.formState.isSubmitting}
+                  disabled={!selectedCustomer || changeForm.formState.isSubmitting}
                   type="submit"
                 >
-                  {versionForm.formState.isSubmitting ? (
+                  {changeForm.formState.isSubmitting ? (
                     <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
                   ) : (
                     <Plus aria-hidden="true" className="size-4" />
                   )}
-                  履歴追加
+                  変更を登録
                 </Button>
               </form>
             ) : (
               <div className="form-empty-state">
                 <p>得意先未選択</p>
-                <span>一覧で対象得意先を選択してから履歴を追加します。</span>
+                <span>一覧で対象得意先を選択してから情報を変更します。</span>
               </div>
             )}
           </section>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
-          <section className="surface section-pad" aria-labelledby="preview-heading">
+          <section className="surface section-pad" aria-labelledby="asof-heading">
             <div className="section-heading">
-              <h2 id="preview-heading">指定日プレビュー</h2>
-              <p>対象日以前で一番新しい得意先履歴を確認します。</p>
+              <h2 id="asof-heading">指定日時点の得意先情報</h2>
+              <p>対象日以前で一番新しい得意先情報を確認します。</p>
             </div>
             <div className="grid gap-3">
               <label className="grid gap-1.5 text-sm font-semibold">
-                対象日
+                参照日
                 <Input
                   type="date"
-                  value={previewDate}
-                  onChange={(event) => changePreviewDate(event.target.value)}
+                  value={asOfDate}
+                  onChange={(event) => changeAsOfDate(event.target.value)}
                 />
               </label>
               <Button
-                disabled={!selectedCustomer || isLoadingPreview}
-                onClick={submitPreview}
+                disabled={!selectedCustomer || isLoadingAsOf}
+                onClick={submitAsOf}
                 type="button"
                 variant="secondary"
               >
-                {isLoadingPreview ? (
+                {isLoadingAsOf ? (
                   <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
                 ) : (
                   <Search aria-hidden="true" className="size-4" />
                 )}
-                プレビュー
+                参照
               </Button>
-              {preview ? (
+              {asOfCustomer ? (
                 <dl className="selected-summary-list">
-                  <dt>履歴ID</dt>
-                  <dd className="font-mono">{preview.customerVersionId}</dd>
                   <dt>得意先名</dt>
-                  <dd>{preview.name}</dd>
+                  <dd>{asOfCustomer.name}</dd>
                   <dt>住所</dt>
-                  <dd>{preview.address}</dd>
+                  <dd>{asOfCustomer.address}</dd>
                   <dt>電話番号</dt>
-                  <dd className="font-mono">{preview.phoneNumber}</dd>
+                  <dd className="font-mono">{asOfCustomer.phoneNumber}</dd>
                   <dt>適用開始日</dt>
-                  <dd>{formatDate(preview.validFrom)}</dd>
+                  <dd>{formatDate(asOfCustomer.effectiveFrom)}</dd>
                 </dl>
               ) : (
                 <div className="selected-empty">
-                  <p>プレビューなし</p>
-                  <span>得意先と対象日を指定して確認します。</span>
+                  <p>参照結果なし</p>
+                  <span>得意先と参照日を指定して確認します。</span>
                 </div>
               )}
             </div>
@@ -718,22 +734,22 @@ export default function CustomersPage() {
 
           <section className="surface section-pad" aria-labelledby="history-heading">
             <div className="section-heading">
-              <h2 id="history-heading">得意先履歴</h2>
+              <h2 id="history-heading">変更履歴</h2>
               <p>
-                同じ得意先 ID の履歴を適用開始日の新しい順で表示します。得意先別商品単価は別マスタで管理します。
+                同じ得意先の変更を適用開始日の新しい順で表示します。将来適用予定も含みます。
               </p>
             </div>
-            {isLoadingVersions ? (
+            {isLoadingChanges ? (
               <p className="flex items-center gap-2 text-sm font-semibold text-slate-600">
                 <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-                履歴を読み込み中
+                変更履歴を読み込み中
               </p>
             ) : null}
             <div className="overflow-x-auto">
               <table className="data-table text-left">
                 <thead>
                   <tr>
-                    <th>履歴ID</th>
+                    <th>状態</th>
                     <th>得意先名</th>
                     <th>住所</th>
                     <th>電話番号</th>
@@ -741,23 +757,29 @@ export default function CustomersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {versions.map((version) => (
-                    <tr key={version.customerVersionId}>
-                      <td className="font-mono text-slate-700">
-                        {version.customerVersionId}
+                  {changes.map((change) => (
+                    <tr key={buildCustomerChangeKey(change)}>
+                      <td>
+                        <ChangeTimingBadge
+                          timing={classifyCustomerChange(
+                            change,
+                            businessDate,
+                            currentEffectiveFrom,
+                          )}
+                        />
                       </td>
-                      <td className="font-semibold">{version.name}</td>
-                      <td>{version.address}</td>
-                      <td className="font-mono">{version.phoneNumber}</td>
-                      <td>{formatDate(version.validFrom)}</td>
+                      <td className="font-semibold">{change.name}</td>
+                      <td>{change.address}</td>
+                      <td className="font-mono">{change.phoneNumber}</td>
+                      <td>{formatDate(change.effectiveFrom)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {!isLoadingVersions && versions.length === 0 ? (
+            {!isLoadingChanges && changes.length === 0 ? (
               <p className="mt-4 text-sm font-semibold text-slate-500">
-                履歴データなし
+                変更履歴なし
               </p>
             ) : null}
           </section>
@@ -767,7 +789,7 @@ export default function CustomersPage() {
   );
 }
 
-function CustomerVersionFields<T extends CustomerVersionFormValues>({
+function CustomerChangeFields<T extends CustomerChangeFormValues>({
   form,
 }: {
   readonly form: UseFormReturn<T>;
@@ -776,7 +798,7 @@ function CustomerVersionFields<T extends CustomerVersionFormValues>({
   const namePath = "name" as Path<T>;
   const addressPath = "address" as Path<T>;
   const phoneNumberPath = "phoneNumber" as Path<T>;
-  const validFromPath = "validFrom" as Path<T>;
+  const effectiveFromPath = "effectiveFrom" as Path<T>;
 
   return (
     <>
@@ -802,11 +824,14 @@ function CustomerVersionFields<T extends CustomerVersionFormValues>({
       <label className="grid gap-1.5 text-sm font-semibold">
         適用開始日
         <Input
-          hasError={Boolean(errors.validFrom)}
+          hasError={Boolean(errors.effectiveFrom)}
           type="date"
-          {...form.register(validFromPath)}
+          {...form.register(effectiveFromPath)}
         />
-        <FieldError message={errorMessage(errors.validFrom?.message)} />
+        <span className="text-xs font-medium text-slate-500">
+          適用開始日は、変更が反映される日です。
+        </span>
+        <FieldError message={errorMessage(errors.effectiveFrom?.message)} />
       </label>
     </>
   );

@@ -1,14 +1,15 @@
 import { apiFetch } from "@/lib/api";
 import {
+  productChangesResponseSchema,
   productListResponseSchema,
   productResponseSchema,
 } from "./_schemas";
 import type {
+  ProductChange,
+  ProductChangeFormValues,
   ProductFormValues,
-  ProductListItem,
   ProductSearchParams,
-  ProductVersion,
-  ProductVersionFormValues,
+  ProductSummary,
 } from "./_types";
 
 const buildQuery = (params: ProductSearchParams) => {
@@ -37,35 +38,45 @@ const toCreateProductRequest = (values: ProductFormValues) => ({
   standardUnitPrice: Number(values.standardUnitPrice),
   taxCategory: values.taxCategory,
   isDiscontinued: values.isDiscontinued,
-  validFrom: values.validFrom,
+  effectiveFrom: values.effectiveFrom,
 });
 
-const toCreateProductVersionRequest = (values: ProductVersionFormValues) => ({
+const toChangeProductRequest = (values: ProductChangeFormValues) => ({
   name: values.name.trim(),
   unit: values.unit.trim(),
   standardUnitPrice: Number(values.standardUnitPrice),
   taxCategory: values.taxCategory,
   isDiscontinued: values.isDiscontinued,
-  validFrom: values.validFrom,
+  effectiveFrom: values.effectiveFrom,
 });
 
 export const fetchProducts = async (
   params: ProductSearchParams,
-): Promise<ProductListItem[]> =>
+): Promise<ProductSummary[]> =>
   productListResponseSchema.parse(
     await apiFetch<unknown>(`/api/products${buildQuery(params)}`),
   );
 
-export const fetchProductVersions = async (
+export const fetchProductChanges = async (
   productId: number,
-): Promise<ProductVersion[]> =>
-  productListResponseSchema.parse(
-    await apiFetch<unknown>(`/api/products/${productId}/versions`),
+): Promise<ProductChange[]> =>
+  productChangesResponseSchema.parse(
+    await apiFetch<unknown>(`/api/products/${productId}/changes`),
+  );
+
+export const fetchProductAsOf = async (
+  productId: number,
+  asOf: string,
+): Promise<ProductSummary> =>
+  productResponseSchema.parse(
+    await apiFetch<unknown>(
+      `/api/products/${productId}?asOf=${encodeURIComponent(asOf)}`,
+    ),
   );
 
 export const createProduct = async (
   values: ProductFormValues,
-): Promise<ProductListItem> =>
+): Promise<ProductSummary> =>
   productResponseSchema.parse(
     await apiFetch<unknown>("/api/products", {
       method: "POST",
@@ -73,13 +84,13 @@ export const createProduct = async (
     }),
   );
 
-export const createProductVersion = async (
+export const changeProduct = async (
   productId: number,
-  values: ProductVersionFormValues,
-): Promise<ProductVersion> =>
+  values: ProductChangeFormValues,
+): Promise<ProductSummary> =>
   productResponseSchema.parse(
-    await apiFetch<unknown>(`/api/products/${productId}/versions`, {
+    await apiFetch<unknown>(`/api/products/${productId}/changes`, {
       method: "POST",
-      body: toCreateProductVersionRequest(values),
+      body: toChangeProductRequest(values),
     }),
   );

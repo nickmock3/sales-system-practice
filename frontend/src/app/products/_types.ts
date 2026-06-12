@@ -5,19 +5,25 @@ export type TaxCategory =
   | "TAX_EXEMPT"
   | "OLD_STANDARD";
 
-export type ProductListItem = {
+export type ProductSummary = {
   readonly productId: number;
   readonly productCode: string;
-  readonly productVersionId: number;
   readonly name: string;
   readonly unit: string;
   readonly standardUnitPrice: number;
   readonly taxCategory: TaxCategory;
   readonly isDiscontinued: boolean;
-  readonly validFrom: string;
+  readonly effectiveFrom: string;
 };
 
-export type ProductVersion = ProductListItem;
+export type ProductChange = {
+  readonly effectiveFrom: string;
+  readonly name: string;
+  readonly unit: string;
+  readonly standardUnitPrice: number;
+  readonly taxCategory: TaxCategory;
+  readonly isDiscontinued: boolean;
+};
 
 export type ProductSearchParams = {
   readonly productCode?: string;
@@ -32,10 +38,10 @@ export type ProductFormValues = {
   readonly standardUnitPrice: string;
   readonly taxCategory: TaxCategory;
   readonly isDiscontinued: boolean;
-  readonly validFrom: string;
+  readonly effectiveFrom: string;
 };
 
-export type ProductVersionFormValues = Omit<ProductFormValues, "productCode">;
+export type ProductChangeFormValues = Omit<ProductFormValues, "productCode">;
 
 export const taxCategoryLabels: Record<TaxCategory, string> = {
   STANDARD: "標準税率",

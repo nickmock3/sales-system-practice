@@ -1,31 +1,38 @@
 import { z } from "zod";
 
+const taxCategorySchema = z.enum([
+  "STANDARD",
+  "REDUCED",
+  "NON_TAXABLE",
+  "TAX_EXEMPT",
+  "OLD_STANDARD",
+]);
+
 export const productResponseSchema = z.object({
   productId: z.number(),
   productCode: z.string(),
-  productVersionId: z.number(),
   name: z.string(),
   unit: z.string(),
   standardUnitPrice: z.number(),
-  taxCategory: z.enum([
-    "STANDARD",
-    "REDUCED",
-    "NON_TAXABLE",
-    "TAX_EXEMPT",
-    "OLD_STANDARD",
-  ]),
+  taxCategory: taxCategorySchema,
   isDiscontinued: z.boolean(),
-  validFrom: z.string(),
+  effectiveFrom: z.string(),
 });
 
 export const productListResponseSchema = z.array(productResponseSchema);
 
-export const productFormSchema = z.object({
-  productCode: z
-    .string()
-    .trim()
-    .min(1, "商品コードは必須です。")
-    .max(30, "商品コードは30文字以内で入力してください。"),
+export const productChangeSchema = z.object({
+  effectiveFrom: z.string(),
+  name: z.string(),
+  unit: z.string(),
+  standardUnitPrice: z.number(),
+  taxCategory: taxCategorySchema,
+  isDiscontinued: z.boolean(),
+});
+
+export const productChangesResponseSchema = z.array(productChangeSchema);
+
+const productFieldsSchema = z.object({
   name: z
     .string()
     .trim()
@@ -49,17 +56,17 @@ export const productFormSchema = z.object({
     .refine((value) => /^\d+(\.\d{1,2})?$/.test(value), {
       message: "標準単価は小数2桁までで入力してください。",
     }),
-  taxCategory: z.enum([
-    "STANDARD",
-    "REDUCED",
-    "NON_TAXABLE",
-    "TAX_EXEMPT",
-    "OLD_STANDARD",
-  ]),
+  taxCategory: taxCategorySchema,
   isDiscontinued: z.boolean(),
-  validFrom: z.string().min(1, "適用開始日は必須です。"),
+  effectiveFrom: z.string().min(1, "適用開始日は必須です。"),
 });
 
-export const productVersionFormSchema = productFormSchema.omit({
-  productCode: true,
+export const productFormSchema = productFieldsSchema.extend({
+  productCode: z
+    .string()
+    .trim()
+    .min(1, "商品コードは必須です。")
+    .max(30, "商品コードは30文字以内で入力してください。"),
 });
+
+export const productChangeFormSchema = productFieldsSchema;

@@ -4,44 +4,55 @@ const customers = [
   {
     customerId: 1,
     customerCode: "C-1001",
-    customerVersionId: 11,
     name: "青山商事",
     address: "東京都港区北青山1-1-1",
     phoneNumber: "03-1111-2222",
-    validFrom: "2026-06-01T00:00:00",
+    effectiveFrom: "2026-06-01",
   },
 ];
 
 const secondCustomer = {
   customerId: 2,
   customerCode: "C-2001",
-  customerVersionId: 21,
   name: "渋谷産業",
   address: "東京都渋谷区渋谷2-2-2",
   phoneNumber: "03-3333-4444",
-  validFrom: "2026-06-02T00:00:00",
+  effectiveFrom: "2026-06-02",
 };
 
-const versions = [
-  customers[0],
+const pastCustomerSummary = {
+  customerId: 1,
+  customerCode: "C-1001",
+  name: "旧青山商事",
+  address: "東京都港区南青山1-1-1",
+  phoneNumber: "03-1111-2222",
+  effectiveFrom: "2026-05-01",
+};
+
+const changes = [
   {
-    ...customers[0],
-    customerVersionId: 10,
+    effectiveFrom: "2026-06-01",
+    name: "青山商事",
+    address: "東京都港区北青山1-1-1",
+    phoneNumber: "03-1111-2222",
+  },
+  {
+    effectiveFrom: "2026-05-01",
     name: "旧青山商事",
     address: "東京都港区南青山1-1-1",
-    validFrom: "2026-05-01T00:00:00",
+    phoneNumber: "03-1111-2222",
   },
 ];
 
-test("得意先マスタ画面で一覧、詳細、履歴、指定日プレビューを確認できる", async ({ page }) => {
+test("得意先マスタ画面で一覧、詳細、変更履歴、指定日参照を確認できる", async ({ page }) => {
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({ json: customers });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[1] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: pastCustomerSummary });
   });
 
   await page.goto("/customers");
@@ -49,19 +60,26 @@ test("得意先マスタ画面で一覧、詳細、履歴、指定日プレビ�
   await expect(page.getByRole("heading", { name: "得意先マスタ" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "C-1001" })).toBeVisible();
   await expect(page.getByText("青山商事").first()).toBeVisible();
-  await expect(page.getByRole("cell", { name: "旧青山商事" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "変更履歴" }).getByRole("cell", {
+      name: "旧青山商事",
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("履歴ID")).not.toBeVisible();
+  await expect(page.getByText("customerVersionId")).not.toBeVisible();
+  await expect(page.getByText("得意先ID")).not.toBeVisible();
   await expect(page.getByRole("link", { name: "得意先別商品単価でこの得意先を確認" }))
     .toHaveAttribute("href", "/customer-product-prices?customerId=1");
 
-  const previewRegion = page.getByRole("region", { name: "指定日プレビュー" });
-  await previewRegion.getByLabel("対象日").fill("2026-05-15");
-  await previewRegion.getByRole("button", { name: "プレビュー" }).click();
-  await expect(previewRegion.getByText("旧青山商事")).toBeVisible();
+  const asOfRegion = page.getByRole("region", { name: "指定日時点の得意先情報" });
+  await asOfRegion.getByLabel("参照日").fill("2026-05-15");
+  await asOfRegion.getByRole("button", { name: "参照" }).click();
+  await expect(asOfRegion.getByText("旧青山商事")).toBeVisible();
 });
 
-test("得意先検索、登録、履歴追加後に一覧と履歴を更新できる", async ({ page }) => {
+test("得意先検索、登録、情報変更後に一覧と変更履歴を更新できる", async ({ page }) => {
   let currentCustomers = [...customers];
-  let currentVersions = [...versions];
+  let currentChanges = [...changes];
   const requestedUrls: string[] = [];
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
@@ -71,11 +89,10 @@ test("得意先検索、登録、履歴追加後に一覧と履歴を更新で�
       const created = {
         customerId: 2,
         customerCode: "C-2001",
-        customerVersionId: 20,
         name: "渋谷産業",
         address: "東京都渋谷区渋谷2-2-2",
         phoneNumber: "03-3333-4444",
-        validFrom: "2026-06-05T00:00:00",
+        effectiveFrom: "2026-06-05",
       };
       currentCustomers = [...currentCustomers, created];
       await route.fulfill({ status: 201, json: created });
@@ -94,31 +111,47 @@ test("得意先検索、登録、履歴追加後に一覧と履歴を更新で�
     });
   });
 
-  await page.route("**/api/customers/1/versions", async (route) => {
+  await page.route("**/api/customers/1/changes", async (route) => {
     if (route.request().method() === "POST") {
-      const added = {
+      const changed = {
         ...customers[0],
-        customerVersionId: 12,
         address: "東京都港区赤坂1-1-1",
         phoneNumber: "03-5555-6666",
-        validFrom: "2026-06-10T00:00:00",
+        effectiveFrom: "2026-06-10",
       };
-      currentCustomers = [added, ...currentCustomers.slice(1)];
-      currentVersions = [added, ...currentVersions];
-      await route.fulfill({ status: 201, json: added });
+      currentCustomers = [changed, ...currentCustomers.slice(1)];
+      currentChanges = [
+        {
+          effectiveFrom: "2026-06-10",
+          name: "青山商事",
+          address: "東京都港区赤坂1-1-1",
+          phoneNumber: "03-5555-6666",
+        },
+        ...currentChanges,
+      ];
+      await route.fulfill({ status: 200, json: changed });
       return;
     }
 
-    await route.fulfill({ json: currentVersions });
+    await route.fulfill({ json: currentChanges });
   });
 
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: currentVersions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: currentCustomers[0] });
   });
-  await page.route("**/api/customers/2/versions", async (route) => {
-    await route.fulfill({ json: [currentCustomers[1]] });
+  await page.route("**/api/customers/2/changes", async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          effectiveFrom: "2026-06-05",
+          name: "渋谷産業",
+          address: "東京都渋谷区渋谷2-2-2",
+          phoneNumber: "03-3333-4444",
+        },
+      ],
+    });
   });
-  await page.route("**/api/customers/2/preview?**", async (route) => {
+  await page.route("**/api/customers/2?asOf=**", async (route) => {
     await route.fulfill({ json: currentCustomers[1] });
   });
 
@@ -145,141 +178,159 @@ test("得意先検索、登録、履歴追加後に一覧と履歴を更新で�
   await expect(page.getByRole("region", { name: "選択中の得意先" }).getByText("渋谷産業")).toBeVisible();
 
   await page.getByRole("cell", { name: "C-1001" }).click();
-  const versionRegion = page.getByRole("region", { name: "得意先履歴追加" });
-  await versionRegion.getByLabel("住所").fill("東京都港区赤坂1-1-1");
-  await versionRegion.getByLabel("電話番号").fill("03-5555-6666");
-  await versionRegion.getByLabel("適用開始日").fill("2026-06-10");
-  await versionRegion.getByRole("button", { name: "履歴追加" }).click();
+  const changeRegion = page.getByRole("region", { name: "得意先情報変更" });
+  await changeRegion.getByLabel("住所").fill("東京都港区赤坂1-1-1");
+  await changeRegion.getByLabel("電話番号").fill("03-5555-6666");
+  await changeRegion.getByLabel("適用開始日").fill("2026-06-10");
+  await changeRegion.getByRole("button", { name: "変更を登録" }).click();
 
-  await expect(page.getByText("得意先履歴を追加し、一覧と履歴を更新しました。")).toBeVisible();
+  await expect(page.getByText("得意先情報を変更し、一覧と変更履歴を更新しました。")).toBeVisible();
   await expect(page.getByText("03-5555-6666").first()).toBeVisible();
 });
 
-test("指定日プレビューのAPIエラーを表示できる", async ({ page }) => {
+test("指定日参照のAPIエラーを表示できる", async ({ page }) => {
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({ json: customers });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
     await route.fulfill({
       status: 404,
-      json: { message: "対象日に適用できる得意先履歴がありません。" },
+      json: { message: "指定日時点で利用できる得意先情報がありません。" },
     });
   });
 
   await page.goto("/customers");
-  const previewRegion = page.getByRole("region", { name: "指定日プレビュー" });
-  await previewRegion.getByLabel("対象日").fill("2026-04-01");
-  await previewRegion.getByRole("button", { name: "プレビュー" }).click();
+  const asOfRegion = page.getByRole("region", { name: "指定日時点の得意先情報" });
+  await asOfRegion.getByLabel("参照日").fill("2026-04-01");
+  await asOfRegion.getByRole("button", { name: "参照" }).click();
 
-  await expect(page.getByText("対象日に適用できる得意先履歴がありません。")).toBeVisible();
+  await expect(page.getByText("指定日時点で利用できる得意先情報がありません。")).toBeVisible();
 });
 
-test("検索結果が0件になったら古い履歴とプレビューを消す", async ({ page }) => {
+test("検索結果が0件になったら古い変更履歴と指定日参照を消す", async ({ page }) => {
   let shouldReturnEmpty = false;
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({ json: shouldReturnEmpty ? [] : customers });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: customers[0] });
   });
 
   await page.goto("/customers");
   await expect(page.getByRole("cell", { name: "旧青山商事" })).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("青山商事")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("青山商事")).toBeVisible();
 
   shouldReturnEmpty = true;
   await page.getByLabel("得意先コード").first().fill("NO-MATCH");
   await page.getByRole("button", { name: "検索" }).first().click();
 
   await expect(page.getByText("該当データなし")).toBeVisible();
-  await expect(page.getByText("履歴データなし")).toBeVisible();
+  await expect(page.getByText("変更履歴なし")).toBeVisible();
   await expect(page.getByText("旧青山商事")).not.toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("プレビューなし")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("参照結果なし")).toBeVisible();
 });
 
-test("別の得意先を選択した直後に古い履歴とプレビューを消す", async ({ page }) => {
-  let releaseVersions: (() => void) | undefined;
-  let releasePreview: (() => void) | undefined;
+test("別の得意先を選択した直後に古い変更履歴と指定日参照を消す", async ({ page }) => {
+  let releaseChanges: (() => void) | undefined;
+  let releaseAsOf: (() => void) | undefined;
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({ json: [...customers, secondCustomer] });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: customers[0] });
   });
-  await page.route("**/api/customers/2/versions", async (route) => {
+  await page.route("**/api/customers/2/changes", async (route) => {
     await new Promise<void>((resolve) => {
-      releaseVersions = resolve;
+      releaseChanges = resolve;
     });
-    await route.fulfill({ json: [secondCustomer] });
+    await route.fulfill({
+      json: [
+        {
+          effectiveFrom: "2026-06-02",
+          name: "渋谷産業",
+          address: "東京都渋谷区渋谷2-2-2",
+          phoneNumber: "03-3333-4444",
+        },
+      ],
+    });
   });
-  await page.route("**/api/customers/2/preview?**", async (route) => {
+  await page.route("**/api/customers/2?asOf=**", async (route) => {
     await new Promise<void>((resolve) => {
-      releasePreview = resolve;
+      releaseAsOf = resolve;
     });
     await route.fulfill({ json: secondCustomer });
   });
 
   await page.goto("/customers");
   await expect(page.getByRole("cell", { name: "旧青山商事" })).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("青山商事")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("青山商事")).toBeVisible();
 
   await page.getByRole("cell", { name: "C-2001" }).click();
 
   await expect(page.getByText("旧青山商事")).not.toBeVisible();
-  await expect(page.getByText("履歴を読み込み中")).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("プレビューなし")).toBeVisible();
-  releaseVersions?.();
-  releasePreview?.();
+  await expect(page.getByText("変更履歴を読み込み中")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("参照結果なし")).toBeVisible();
+  releaseChanges?.();
+  releaseAsOf?.();
   await expect(
-    page.getByLabel("得意先履歴", { exact: true }).getByRole("cell", {
+    page.getByRole("region", { name: "変更履歴" }).getByRole("cell", {
       name: "渋谷産業",
     }),
   ).toBeVisible();
 });
 
-test("検索で選択得意先が自動変更されたら古い履歴とプレビューを消す", async ({ page }) => {
+test("検索で選択得意先が自動変更されたら古い変更履歴と指定日参照を消す", async ({ page }) => {
   let shouldReturnSecondOnly = false;
-  let releaseVersions: (() => void) | undefined;
-  let releasePreview: (() => void) | undefined;
+  let releaseChanges: (() => void) | undefined;
+  let releaseAsOf: (() => void) | undefined;
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({
       json: shouldReturnSecondOnly ? [secondCustomer] : customers,
     });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: customers[0] });
   });
-  await page.route("**/api/customers/2/versions", async (route) => {
+  await page.route("**/api/customers/2/changes", async (route) => {
     await new Promise<void>((resolve) => {
-      releaseVersions = resolve;
+      releaseChanges = resolve;
     });
-    await route.fulfill({ json: [secondCustomer] });
+    await route.fulfill({
+      json: [
+        {
+          effectiveFrom: "2026-06-02",
+          name: "渋谷産業",
+          address: "東京都渋谷区渋谷2-2-2",
+          phoneNumber: "03-3333-4444",
+        },
+      ],
+    });
   });
-  await page.route("**/api/customers/2/preview?**", async (route) => {
+  await page.route("**/api/customers/2?asOf=**", async (route) => {
     await new Promise<void>((resolve) => {
-      releasePreview = resolve;
+      releaseAsOf = resolve;
     });
     await route.fulfill({ json: secondCustomer });
   });
 
   await page.goto("/customers");
   await expect(page.getByRole("cell", { name: "旧青山商事" })).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("青山商事")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("青山商事")).toBeVisible();
 
   shouldReturnSecondOnly = true;
   await page.getByLabel("得意先コード").first().fill("C-2001");
@@ -287,51 +338,68 @@ test("検索で選択得意先が自動変更されたら古い履歴とプレ�
 
   await expect(page.getByRole("cell", { name: "C-2001" })).toBeVisible();
   await expect(page.getByText("旧青山商事")).not.toBeVisible();
-  await expect(page.getByText("履歴を読み込み中")).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("プレビューなし")).toBeVisible();
-  releaseVersions?.();
-  releasePreview?.();
-  await expect(page.getByRole("cell", { name: "渋谷産業" })).toBeVisible();
+  await expect(page.getByText("変更履歴を読み込み中")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("参照結果なし")).toBeVisible();
+  releaseChanges?.();
+  releaseAsOf?.();
+  await expect(
+    page.getByRole("region", { name: "変更履歴" }).getByRole("cell", {
+      name: "渋谷産業",
+    }),
+  ).toBeVisible();
 });
 
-test("古い履歴とプレビューのAPI応答が後から返っても表示しない", async ({ page }) => {
-  let releaseOldVersions: (() => void) | undefined;
-  let releaseOldPreview: (() => void) | undefined;
+test("古い変更履歴と指定日参照のAPI応答が後から返っても表示しない", async ({ page }) => {
+  let releaseOldChanges: (() => void) | undefined;
+  let releaseOldAsOf: (() => void) | undefined;
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     await route.fulfill({ json: [...customers, secondCustomer] });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
+  await page.route("**/api/customers/1/changes", async (route) => {
     await new Promise<void>((resolve) => {
-      releaseOldVersions = resolve;
+      releaseOldChanges = resolve;
     });
-    await route.fulfill({ json: versions });
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
     await new Promise<void>((resolve) => {
-      releaseOldPreview = resolve;
+      releaseOldAsOf = resolve;
     });
-    await route.fulfill({ json: versions[0] });
+    await route.fulfill({ json: customers[0] });
   });
-  await page.route("**/api/customers/2/versions", async (route) => {
-    await route.fulfill({ json: [secondCustomer] });
+  await page.route("**/api/customers/2/changes", async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          effectiveFrom: "2026-06-02",
+          name: "渋谷産業",
+          address: "東京都渋谷区渋谷2-2-2",
+          phoneNumber: "03-3333-4444",
+        },
+      ],
+    });
   });
-  await page.route("**/api/customers/2/preview?**", async (route) => {
+  await page.route("**/api/customers/2?asOf=**", async (route) => {
     await route.fulfill({ json: secondCustomer });
   });
 
   await page.goto("/customers");
   await expect(page.getByRole("cell", { name: "C-2001" })).toBeVisible();
-  await expect.poll(() => Boolean(releaseOldVersions && releaseOldPreview))
+  await expect.poll(() => Boolean(releaseOldChanges && releaseOldAsOf))
     .toBe(true);
 
   await page.getByRole("cell", { name: "C-2001" }).click();
-  releaseOldVersions?.();
-  releaseOldPreview?.();
+  releaseOldChanges?.();
+  releaseOldAsOf?.();
 
-  await expect(page.getByRole("cell", { name: "渋谷産業" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "変更履歴" }).getByRole("cell", {
+      name: "渋谷産業",
+    }),
+  ).toBeVisible();
   await expect(page.getByText("旧青山商事")).not.toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("青山商事")).not.toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("青山商事")).not.toBeVisible();
 });
 
 test("未来日適用の新規得意先は現在一覧へ補完しない", async ({ page }) => {
@@ -341,7 +409,7 @@ test("未来日適用の新規得意先は現在一覧へ補完しない", async
     if (route.request().method() === "POST") {
       const created = {
         ...secondCustomer,
-        validFrom: "2999-01-01T00:00:00",
+        effectiveFrom: "2999-01-01",
       };
       currentCustomers = [...currentCustomers, created];
       await route.fulfill({ status: 201, json: created });
@@ -349,14 +417,14 @@ test("未来日適用の新規得意先は現在一覧へ補完しない", async
     }
 
     await route.fulfill({
-      json: currentCustomers.filter((customer) => customer.validFrom <= "2026-06-06T00:00:00"),
+      json: currentCustomers.filter((customer) => customer.effectiveFrom <= "2026-06-06"),
     });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: customers[0] });
   });
 
   await page.goto("/customers");
@@ -394,11 +462,11 @@ test("新規登録後の一覧再読込に失敗したら得意先を補完表�
 
     await route.fulfill({ json: customers });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
-    await route.fulfill({ json: versions });
+  await page.route("**/api/customers/1/changes", async (route) => {
+    await route.fulfill({ json: changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: customers[0] });
   });
 
   await page.goto("/customers");
@@ -417,15 +485,23 @@ test("新規登録後の一覧再読込に失敗したら得意先を補完表�
   await expect(page.getByRole("region", { name: "選択中の得意先" }).getByText("未選択")).toBeVisible();
 });
 
-test("履歴追加後の一覧再読込に失敗しても履歴とプレビューを更新する", async ({ page }) => {
+test("情報変更後の一覧再読込に失敗しても変更履歴と指定日参照を更新する", async ({ page }) => {
   let failReload = false;
-  const added = {
+  const changed = {
     ...customers[0],
-    customerVersionId: 12,
     address: "東京都港区赤坂1-1-1",
     phoneNumber: "03-5555-6666",
-    validFrom: "2026-06-10T00:00:00",
+    effectiveFrom: "2026-06-10",
   };
+  const updatedChanges = [
+    {
+      effectiveFrom: "2026-06-10",
+      name: "青山商事",
+      address: "東京都港区赤坂1-1-1",
+      phoneNumber: "03-5555-6666",
+    },
+    ...changes,
+  ];
 
   await page.route((url) => url.pathname === "/api/customers", async (route) => {
     if (failReload) {
@@ -438,28 +514,28 @@ test("履歴追加後の一覧再読込に失敗しても履歴とプレビュ�
 
     await route.fulfill({ json: customers });
   });
-  await page.route("**/api/customers/1/versions", async (route) => {
+  await page.route("**/api/customers/1/changes", async (route) => {
     if (route.request().method() === "POST") {
       failReload = true;
-      await route.fulfill({ status: 201, json: added });
+      await route.fulfill({ status: 200, json: changed });
       return;
     }
 
-    await route.fulfill({ json: failReload ? [added, ...versions] : versions });
+    await route.fulfill({ json: failReload ? updatedChanges : changes });
   });
-  await page.route("**/api/customers/1/preview?**", async (route) => {
-    await route.fulfill({ json: failReload ? added : versions[0] });
+  await page.route("**/api/customers/1?asOf=**", async (route) => {
+    await route.fulfill({ json: failReload ? changed : customers[0] });
   });
 
   await page.goto("/customers");
-  const versionRegion = page.getByRole("region", { name: "得意先履歴追加" });
-  await versionRegion.getByLabel("住所").fill("東京都港区赤坂1-1-1");
-  await versionRegion.getByLabel("電話番号").fill("03-5555-6666");
-  await versionRegion.getByLabel("適用開始日").fill("2026-06-10");
-  await versionRegion.getByRole("button", { name: "履歴追加" }).click();
+  const changeRegion = page.getByRole("region", { name: "得意先情報変更" });
+  await changeRegion.getByLabel("住所").fill("東京都港区赤坂1-1-1");
+  await changeRegion.getByLabel("電話番号").fill("03-5555-6666");
+  await changeRegion.getByLabel("適用開始日").fill("2026-06-10");
+  await changeRegion.getByRole("button", { name: "変更を登録" }).click();
 
-  await expect(page.getByText("得意先履歴を追加しました。一覧の再読込に失敗しました。")).toBeVisible();
+  await expect(page.getByText("得意先情報を変更しました。一覧の再読込に失敗しました。")).toBeVisible();
   await expect(page.getByText("一覧の再読込に失敗しました。", { exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "03-5555-6666" })).toBeVisible();
-  await expect(page.getByLabel("指定日プレビュー").getByText("03-5555-6666")).toBeVisible();
+  await expect(page.getByLabel("指定日時点の得意先情報").getByText("03-5555-6666")).toBeVisible();
 });

@@ -3,21 +3,24 @@ import { z } from "zod";
 export const customerResponseSchema = z.object({
   customerId: z.number(),
   customerCode: z.string(),
-  customerVersionId: z.number(),
   name: z.string(),
   address: z.string(),
   phoneNumber: z.string(),
-  validFrom: z.string(),
+  effectiveFrom: z.string(),
 });
 
 export const customerListResponseSchema = z.array(customerResponseSchema);
 
-export const customerFormSchema = z.object({
-  customerCode: z
-    .string()
-    .trim()
-    .min(1, "得意先コードは必須です。")
-    .max(30, "得意先コードは30文字以内で入力してください。"),
+export const customerChangeSchema = z.object({
+  effectiveFrom: z.string(),
+  name: z.string(),
+  address: z.string(),
+  phoneNumber: z.string(),
+});
+
+export const customerChangesResponseSchema = z.array(customerChangeSchema);
+
+const customerFieldsSchema = z.object({
   name: z
     .string()
     .trim()
@@ -33,9 +36,15 @@ export const customerFormSchema = z.object({
     .trim()
     .min(1, "電話番号は必須です。")
     .max(30, "電話番号は30文字以内で入力してください。"),
-  validFrom: z.string().min(1, "適用開始日は必須です。"),
+  effectiveFrom: z.string().min(1, "適用開始日は必須です。"),
 });
 
-export const customerVersionFormSchema = customerFormSchema.omit({
-  customerCode: true,
+export const customerFormSchema = customerFieldsSchema.extend({
+  customerCode: z
+    .string()
+    .trim()
+    .min(1, "得意先コードは必須です。")
+    .max(30, "得意先コードは30文字以内で入力してください。"),
 });
+
+export const customerChangeFormSchema = customerFieldsSchema;

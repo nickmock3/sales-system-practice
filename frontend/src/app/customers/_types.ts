@@ -1,23 +1,22 @@
-export type CustomerListItem = {
+export type CustomerSummary = {
   readonly customerId: number;
   readonly customerCode: string;
-  readonly customerVersionId: number;
   readonly name: string;
   readonly address: string;
   readonly phoneNumber: string;
-  readonly validFrom: string;
+  readonly effectiveFrom: string;
 };
 
-export type CustomerVersion = CustomerListItem;
+export type CustomerChange = {
+  readonly effectiveFrom: string;
+  readonly name: string;
+  readonly address: string;
+  readonly phoneNumber: string;
+};
 
 export type CustomerSearchParams = {
   readonly customerCode?: string;
   readonly name?: string;
-};
-
-export type CustomerPreviewParams = {
-  readonly customerId: number;
-  readonly targetDate: string;
 };
 
 export type CustomerFormValues = {
@@ -25,7 +24,7 @@ export type CustomerFormValues = {
   readonly name: string;
   readonly address: string;
   readonly phoneNumber: string;
-  readonly validFrom: string;
+  readonly effectiveFrom: string;
 };
 
-export type CustomerVersionFormValues = Omit<CustomerFormValues, "customerCode">;
+export type CustomerChangeFormValues = Omit<CustomerFormValues, "customerCode">;

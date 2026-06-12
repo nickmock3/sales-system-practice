@@ -1,15 +1,15 @@
 import { apiFetch } from "@/lib/api";
 import {
+  customerChangesResponseSchema,
   customerListResponseSchema,
   customerResponseSchema,
 } from "./_schemas";
 import type {
+  CustomerChange,
+  CustomerChangeFormValues,
   CustomerFormValues,
-  CustomerListItem,
-  CustomerPreviewParams,
   CustomerSearchParams,
-  CustomerVersion,
-  CustomerVersionFormValues,
+  CustomerSummary,
 } from "./_types";
 
 const buildQuery = (params: CustomerSearchParams) => {
@@ -32,45 +32,43 @@ const toCreateCustomerRequest = (values: CustomerFormValues) => ({
   name: values.name.trim(),
   address: values.address.trim(),
   phoneNumber: values.phoneNumber.trim(),
-  validFrom: values.validFrom,
+  effectiveFrom: values.effectiveFrom,
 });
 
-const toCreateCustomerVersionRequest = (
-  values: CustomerVersionFormValues,
-) => ({
+const toChangeCustomerRequest = (values: CustomerChangeFormValues) => ({
   name: values.name.trim(),
   address: values.address.trim(),
   phoneNumber: values.phoneNumber.trim(),
-  validFrom: values.validFrom,
+  effectiveFrom: values.effectiveFrom,
 });
 
 export const fetchCustomers = async (
   params: CustomerSearchParams,
-): Promise<CustomerListItem[]> =>
+): Promise<CustomerSummary[]> =>
   customerListResponseSchema.parse(
     await apiFetch<unknown>(`/api/customers${buildQuery(params)}`),
   );
 
-export const fetchCustomerVersions = async (
+export const fetchCustomerChanges = async (
   customerId: number,
-): Promise<CustomerVersion[]> =>
-  customerListResponseSchema.parse(
-    await apiFetch<unknown>(`/api/customers/${customerId}/versions`),
+): Promise<CustomerChange[]> =>
+  customerChangesResponseSchema.parse(
+    await apiFetch<unknown>(`/api/customers/${customerId}/changes`),
   );
 
-export const previewCustomer = async ({
-  customerId,
-  targetDate,
-}: CustomerPreviewParams): Promise<CustomerVersion> =>
+export const fetchCustomerAsOf = async (
+  customerId: number,
+  asOf: string,
+): Promise<CustomerSummary> =>
   customerResponseSchema.parse(
     await apiFetch<unknown>(
-      `/api/customers/${customerId}/preview?targetDate=${encodeURIComponent(targetDate)}`,
+      `/api/customers/${customerId}?asOf=${encodeURIComponent(asOf)}`,
     ),
   );
 
 export const createCustomer = async (
   values: CustomerFormValues,
-): Promise<CustomerListItem> =>
+): Promise<CustomerSummary> =>
   customerResponseSchema.parse(
     await apiFetch<unknown>("/api/customers", {
       method: "POST",
@@ -78,13 +76,13 @@ export const createCustomer = async (
     }),
   );
 
-export const createCustomerVersion = async (
+export const changeCustomer = async (
   customerId: number,
-  values: CustomerVersionFormValues,
-): Promise<CustomerVersion> =>
+  values: CustomerChangeFormValues,
+): Promise<CustomerSummary> =>
   customerResponseSchema.parse(
-    await apiFetch<unknown>(`/api/customers/${customerId}/versions`, {
+    await apiFetch<unknown>(`/api/customers/${customerId}/changes`, {
       method: "POST",
-      body: toCreateCustomerVersionRequest(values),
+      body: toChangeCustomerRequest(values),
     }),
   );

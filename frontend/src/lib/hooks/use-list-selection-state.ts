@@ -39,10 +39,10 @@ export const useListSelectionState = <
   onSelectionChange,
 }: UseListSelectionStateOptions<TItem, TId>) => {
   const [items, setItems] = useState<readonly TItem[]>([]);
-  const [selectedId, setSelectedIdState] = useState<TId>();
+  const [selectedId, setSelectedIdState] = useState<TId | undefined>(undefined);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const selectedIdRef = useRef<TId>();
+  const selectedIdRef = useRef<TId | undefined>(undefined);
   const requestIdRef = useRef(0);
 
   const selectId = useCallback(
