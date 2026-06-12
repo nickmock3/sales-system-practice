@@ -18,27 +18,26 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithMasterMaintainerRole_CreatesTaxRate()
+    public async Task ChangeTaxRate_WithMasterMaintainerRole_ChangesTaxRate()
     {
         // MasterMaintainer ロールがあれば税率を登録できることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "STANDARD",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var created = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
-        Assert.NotNull(created);
-        Assert.Equal("STANDARD", created.TaxCategory);
-        Assert.Equal("標準税率", created.TaxCategoryName);
-        Assert.Equal("TAXABLE_STANDARD", created.AccountingCategory);
-        Assert.Equal(0.1m, created.Rate);
-        Assert.Equal(new DateTime(2026, 1, 1), created.ValidFrom);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var changed = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
+        Assert.NotNull(changed);
+        Assert.Equal("STANDARD", changed.TaxCategory);
+        Assert.Equal("標準税率", changed.TaxCategoryName);
+        Assert.Equal("TAXABLE_STANDARD", changed.AccountingCategory);
+        Assert.Equal(0.1m, changed.Rate);
+        Assert.Equal(new DateTime(2026, 1, 1), changed.EffectiveFrom);
     }
 
     [Theory]
@@ -47,7 +46,7 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
     [InlineData("NON_TAXABLE", "非課税", "NON_TAXABLE", "0.00")]
     [InlineData("TAX_EXEMPT", "免税", "TAX_EXEMPT", "0.00")]
     [InlineData("OLD_STANDARD", "旧標準税率", "TAXABLE_OLD_STANDARD", "0.08")]
-    public async Task CreateTaxRate_WithDefinedTaxCategory_CreatesTaxRateWithCategoryMetadata(
+    public async Task ChangeTaxRate_WithDefinedTaxCategory_ChangesTaxRateWithCategoryMetadata(
         string taxCategory,
         string taxCategoryName,
         string accountingCategory,
@@ -58,33 +57,32 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         using var client = CreateMasterMaintainerClient();
         var rate = decimal.Parse(rateText);
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync($"/api/tax-rates/{taxCategory}/changes", new
         {
-            taxCategory,
             rate,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var created = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
-        Assert.NotNull(created);
-        Assert.Equal(taxCategory, created.TaxCategory);
-        Assert.Equal(taxCategoryName, created.TaxCategoryName);
-        Assert.Equal(accountingCategory, created.AccountingCategory);
-        Assert.Equal(rate, created.Rate);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var changed = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
+        Assert.NotNull(changed);
+        Assert.Equal(taxCategory, changed.TaxCategory);
+        Assert.Equal(taxCategoryName, changed.TaxCategoryName);
+        Assert.Equal(accountingCategory, changed.AccountingCategory);
+        Assert.Equal(rate, changed.Rate);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithSameRateAndDifferentTaxCategory_CreatesSeparateRates()
+    public async Task ChangeTaxRate_WithSameRateAndDifferentTaxCategory_CreatesSeparateRates()
     {
         // 同じ税率値でも税区分が異なれば別レコードとして登録できることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        await CreateTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
-        await CreateTaxRateAsync(client, "OLD_STANDARD", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "OLD_STANDARD", 0.08m, "2026-01-01");
 
-        using var response = await client.GetAsync("/api/tax-rates");
+        using var response = await client.GetAsync("/api/tax-rates?asOf=2026-04-15");
         var taxRates = await response.Content.ReadFromJsonAsync<List<TaxRateResponse>>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -94,174 +92,211 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithDuplicateTaxCategoryAndValidFrom_ReturnsConflict()
+    public async Task ChangeTaxRate_WithDuplicateEffectiveFrom_ReturnsConflict()
     {
         // 同じ税区分と適用開始日の税率を登録すると競合エラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var request = new
         {
-            taxCategory = "STANDARD",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         };
 
-        using var first = await client.PostAsJsonAsync("/api/tax-rates", request);
-        using var second = await client.PostAsJsonAsync("/api/tax-rates", request);
+        using var first = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", request);
+        using var second = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", request);
 
-        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithInvalidInput_ReturnsValidationProblem()
+    public async Task ChangeTaxRate_WithInvalidInput_ReturnsValidationProblem()
     {
         // 必須項目や税率精度が不正な場合にバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "",
             rate = 0.12345m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithUnknownTaxCategory_ReturnsValidationProblem()
+    public async Task ChangeTaxRate_WithUnknownTaxCategory_ReturnsValidationProblem()
     {
         // 定義されていない税区分を指定するとバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/UNKNOWN/changes", new
         {
-            taxCategory = "UNKNOWN",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithNonTaxableNonZeroRate_ReturnsValidationProblem()
+    public async Task ChangeTaxRate_WithNonTaxableNonZeroRate_ReturnsValidationProblem()
     {
         // 非課税と免税に0以外の税率を指定するとバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/NON_TAXABLE/changes", new
         {
-            taxCategory = "NON_TAXABLE",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithTaxableZeroRate_ReturnsValidationProblem()
+    public async Task ChangeTaxRate_WithTaxableZeroRate_ReturnsValidationProblem()
     {
         // 課税対象の税区分に0税率を指定するとバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "STANDARD",
             rate = 0m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateTaxRate_WithRateOverDatabasePrecision_ReturnsValidationProblem()
+    public async Task ChangeTaxRate_WithRateOverDatabasePrecision_ReturnsValidationProblem()
     {
         // DB 精度を超える税率を指定した場合にバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "STANDARD",
             rate = 10m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task GetTaxRates_ReturnsRatesFilteredByCategoryInValidFromDescendingOrder()
+    public async Task ChangeTaxRate_ResponseDoesNotContainTaxRateId()
     {
-        // 税率一覧で税区分絞り込みと適用開始日降順の並びになることを確認する。
+        // 通常レスポンスに内部履歴 ID が含まれないことを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
-        await CreateTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
-        await CreateTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
-        await CreateTaxRateAsync(client, "STANDARD", 0.1m, "2026-04-01");
 
-        using var response = await client.GetAsync("/api/tax-rates?taxCategory=STANDARD");
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
+        {
+            rate = 0.1m,
+            effectiveFrom = "2026-01-01"
+        });
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("taxRateId", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetTaxRates_ReturnsOneRatePerCategoryAtAsOf()
+    {
+        // 指定日時点で税区分ごとに1件ずつ適用税率が返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        await ChangeTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "REDUCED", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "STANDARD", 0.1m, "2026-04-01");
+
+        using var response = await client.GetAsync("/api/tax-rates?asOf=2026-04-15");
         var taxRates = await response.Content.ReadFromJsonAsync<List<TaxRateResponse>>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(taxRates);
         Assert.Equal(2, taxRates.Count);
-        Assert.All(taxRates, taxRate => Assert.Equal("STANDARD", taxRate.TaxCategory));
-        Assert.Equal(new DateTime(2026, 4, 1), taxRates[0].ValidFrom);
-        Assert.Equal(new DateTime(2026, 1, 1), taxRates[1].ValidFrom);
+
+        var standard = Assert.Single(taxRates, taxRate => taxRate.TaxCategory == "STANDARD");
+        Assert.Equal(0.1m, standard.Rate);
+        Assert.Equal(new DateTime(2026, 4, 1), standard.EffectiveFrom);
+
+        var reduced = Assert.Single(taxRates, taxRate => taxRate.TaxCategory == "REDUCED");
+        Assert.Equal(0.08m, reduced.Rate);
+        Assert.Equal(new DateTime(2026, 1, 1), reduced.EffectiveFrom);
     }
 
     [Fact]
-    public async Task GetTaxRates_WithTooLongTaxCategory_ReturnsValidationProblem()
+    public async Task GetTaxRate_ReturnsLatestRateOnOrBeforeAsOf()
     {
-        // 税率一覧の税区分検索値が長すぎる場合にバリデーションエラーになることを確認する。
+        // 指定日以前で一番新しい税率が詳細結果として返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        await ChangeTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "STANDARD", 0.1m, "2026-04-01");
+
+        using var response = await client.GetAsync("/api/tax-rates/STANDARD?asOf=2026-04-15");
+        var detail = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(detail);
+        Assert.Equal(0.1m, detail.Rate);
+        Assert.Equal(new DateTime(2026, 4, 1), detail.EffectiveFrom);
+    }
+
+    [Fact]
+    public async Task GetTaxRate_BeforeInitialEffectiveFrom_ReturnsNotFound()
+    {
+        // 初回適用開始日より前の日付では適用できる税率なしとして扱うことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        await ChangeTaxRateAsync(client, "STANDARD", 0.1m, "2026-01-01");
+
+        using var response = await client.GetAsync("/api/tax-rates/STANDARD?asOf=2025-12-31");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetTaxRate_WithUnknownTaxCategory_ReturnsValidationProblem()
+    {
+        // 定義されていない税区分を指定すると詳細取得でバリデーションエラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.GetAsync($"/api/tax-rates?taxCategory={new string('A', 31)}");
+        using var response = await client.GetAsync("/api/tax-rates/UNKNOWN?asOf=2026-04-15");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task PreviewTaxRate_ReturnsLatestRateOnOrBeforeTargetDate()
+    public async Task GetTaxRateChanges_ReturnsAllChangesDescending()
     {
-        // 指定日以前で一番新しい税率がプレビュー結果として返ることを確認する。
+        // 税区分の変更履歴が適用開始日降順で返ることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
-        await CreateTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
-        await CreateTaxRateAsync(client, "STANDARD", 0.1m, "2026-04-01");
+        await ChangeTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
+        await ChangeTaxRateAsync(client, "STANDARD", 0.1m, "2026-04-01");
 
-        using var response = await client.GetAsync(
-            "/api/tax-rates/preview?taxCategory=STANDARD&targetDate=2026-04-15T23:59:59");
-        var preview = await response.Content.ReadFromJsonAsync<TaxRateResponse>();
+        using var response = await client.GetAsync("/api/tax-rates/STANDARD/changes");
+        var changes = await response.Content.ReadFromJsonAsync<List<TaxRateChangeResponse>>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(preview);
-        Assert.Equal(0.1m, preview.Rate);
-        Assert.Equal(new DateTime(2026, 4, 1), preview.ValidFrom);
-    }
-
-    [Fact]
-    public async Task PreviewTaxRate_BeforeInitialValidFrom_ReturnsNotFound()
-    {
-        // 初回適用開始日より前の日付では適用できる税率なしとして扱うことを確認する。
-        await ResetDatabaseAsync();
-        using var client = CreateMasterMaintainerClient();
-        await CreateTaxRateAsync(client, "STANDARD", 0.1m, "2026-01-01");
-
-        using var response = await client.GetAsync(
-            "/api/tax-rates/preview?taxCategory=STANDARD&targetDate=2025-12-31");
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.NotNull(changes);
+        Assert.Equal(2, changes.Count);
+        Assert.All(changes, change => Assert.Equal("STANDARD", change.TaxCategory));
+        Assert.Equal(0.1m, changes[0].Rate);
+        Assert.Equal(new DateTime(2026, 4, 1), changes[0].EffectiveFrom);
+        Assert.Equal(0.08m, changes[1].Rate);
+        Assert.Equal(new DateTime(2026, 1, 1), changes[1].EffectiveFrom);
     }
 
     [Fact]
@@ -284,11 +319,10 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         using var client = _factory.CreateClient();
         client.SetDummyUser("user1");
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "STANDARD",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -301,14 +335,13 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
 
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync("/api/tax-rates/STANDARD/changes", new
         {
-            taxCategory = "STANDARD",
             rate = 0.1m,
-            validFrom = "2026-01-01"
+            effectiveFrom = "2026-01-01"
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     private HttpClient CreateMasterMaintainerClient()
@@ -318,17 +351,16 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
         return client;
     }
 
-    private static async Task CreateTaxRateAsync(
+    private static async Task ChangeTaxRateAsync(
         HttpClient client,
         string taxCategory,
         decimal rate,
-        string validFrom)
+        string effectiveFrom)
     {
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync($"/api/tax-rates/{taxCategory}/changes", new
         {
-            taxCategory,
             rate,
-            validFrom
+            effectiveFrom
         });
 
         response.EnsureSuccessStatusCode();
@@ -343,10 +375,16 @@ public sealed class TaxRateApiTests : IClassFixture<SalesSystemWebApplicationFac
     }
 
     private sealed record TaxRateResponse(
-        long TaxRateId,
         string TaxCategory,
         string TaxCategoryName,
         string AccountingCategory,
         decimal Rate,
-        DateTime ValidFrom);
+        DateTime EffectiveFrom);
+
+    private sealed record TaxRateChangeResponse(
+        string TaxCategory,
+        string TaxCategoryName,
+        string AccountingCategory,
+        decimal Rate,
+        DateTime EffectiveFrom);
 }

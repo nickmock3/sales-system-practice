@@ -19,15 +19,19 @@ X-Dummy-Roles: {{roles}}
   "standardUnitPrice": 1200,
   "taxCategory": "STANDARD",
   "isDiscontinued": false,
-  "validFrom": "2026-01-01"
+  "effectiveFrom": "2026-01-01"
 }
 
-### 商品履歴一覧
-GET {{baseUrl}}/api/products/1/versions
+### 指定日時点の商品情報
+GET {{baseUrl}}/api/products/1?asOf=2026-04-15
 X-Dummy-User: {{user}}
 
-### 商品履歴追加
-POST {{baseUrl}}/api/products/1/versions
+### 商品変更履歴一覧
+GET {{baseUrl}}/api/products/1/changes
+X-Dummy-User: {{user}}
+
+### 指定日からの商品情報変更
+POST {{baseUrl}}/api/products/1/changes
 Content-Type: application/json
 X-Dummy-User: {{user}}
 X-Dummy-Roles: {{roles}}
@@ -38,9 +42,5 @@ X-Dummy-Roles: {{roles}}
   "standardUnitPrice": 1300,
   "taxCategory": "STANDARD",
   "isDiscontinued": false,
-  "validFrom": "2026-04-01"
+  "effectiveFrom": "2026-04-01"
 }
-
-### 指定日プレビュー
-GET {{baseUrl}}/api/products/1/preview?targetDate=2026-04-15
-X-Dummy-User: {{user}}

@@ -1,7 +1,6 @@
 namespace SalesSystem.Api.Features.CustomerProductPrices;
 
-public sealed record CustomerProductPriceListItemResponse(
-    long CustomerProductPriceId,
+public sealed record CustomerProductPriceSummary(
     long CustomerId,
     string CustomerCode,
     string CustomerName,
@@ -9,45 +8,33 @@ public sealed record CustomerProductPriceListItemResponse(
     string ProductCode,
     string ProductName,
     decimal UnitPrice,
-    DateTime ValidFrom,
+    DateTime EffectiveFrom,
     DateTime CreatedAt);
 
-public sealed record CustomerProductPriceResponse(
-    long CustomerProductPriceId,
-    long CustomerId,
-    string CustomerCode,
-    string CustomerName,
-    long ProductId,
-    string ProductCode,
-    string ProductName,
+public sealed record CustomerProductPriceChange(
     decimal UnitPrice,
-    DateTime ValidFrom,
+    DateTime EffectiveFrom,
     DateTime CreatedAt);
 
 public sealed record CustomerProductPricePreviewResponse(
     long CustomerId,
     string CustomerCode,
-    long CustomerVersionId,
     string CustomerName,
     long ProductId,
     string ProductCode,
-    long ProductVersionId,
     string ProductName,
     string Unit,
     decimal AutoUnitPrice,
     string UnitPriceSource,
-    long? CustomerProductPriceId,
-    DateTime? CustomerProductPriceValidFrom,
     decimal StandardUnitPrice,
-    DateTime ProductVersionValidFrom,
-    DateTime TargetDate);
+    DateTime AsOf);
 
 public sealed record CreateCustomerProductPriceRequest(
     long CustomerId,
     long ProductId,
     decimal UnitPrice,
-    DateTime ValidFrom);
+    DateTime EffectiveFrom);
 
-public sealed record CreateCustomerProductPriceHistoryRequest(
+public sealed record ChangeCustomerProductPriceRequest(
     decimal UnitPrice,
-    DateTime ValidFrom);
+    DateTime EffectiveFrom);

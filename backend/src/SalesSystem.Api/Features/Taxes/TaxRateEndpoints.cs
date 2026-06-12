@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
 using SalesSystem.Api.Domain.Entities;
+using SalesSystem.Api.Features.Products;
 using SalesSystem.Api.Persistence;
 
 namespace SalesSystem.Api.Features.Taxes;
@@ -14,84 +15,142 @@ public static class TaxRateEndpoints
         group.MapGet("/", GetTaxRates)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
-        group.MapPost("/", CreateTaxRate)
-            .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
-
-        group.MapGet("/preview", PreviewTaxRate)
+        group.MapGet("/{taxCategory}", GetTaxRate)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
+        group.MapGet("/{taxCategory}/changes", GetTaxRateChanges)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
+        group.MapPost("/{taxCategory}/changes", ChangeTaxRate)
+            .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
         return endpoints;
     }
 
     private static async Task<IResult> GetTaxRates(
         AppDbContext dbContext,
-        string? taxCategory,
+        IBusinessClock businessClock,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
-        if (taxCategory is not null && taxCategory.Length > 30)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
+        var date = (asOf ?? businessClock.Today).Date;
+
+        var latestValidFromByCategory =
+            from rate in dbContext.TaxRates.AsNoTracking()
+            where rate.ValidFrom <= date
+            group rate by rate.TaxCategory into grouped
+            select new
             {
-                [nameof(taxCategory)] = ["30文字以内で指定してください。"]
-            });
-        }
+                TaxCategory = grouped.Key,
+                ValidFrom = grouped.Max(rate => rate.ValidFrom)
+            };
 
-        var query = dbContext.TaxRates.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(taxCategory))
-        {
-            var category = taxCategory.Trim();
-            if (!TaxCategories.TryGet(category, out _))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    [nameof(taxCategory)] = ["未知の税区分です。"]
-                });
-            }
-
-            query = query.Where(taxRate => taxRate.TaxCategory == category);
-        }
-
-        var taxRates = await query
-            .OrderByDescending(taxRate => taxRate.ValidFrom)
-            .ThenByDescending(taxRate => taxRate.Id)
-            .Select(taxRate => ToTaxRateResponse(taxRate))
+        var taxRates = await (
+            from latest in latestValidFromByCategory
+            join rate in dbContext.TaxRates.AsNoTracking()
+                on new { latest.TaxCategory, latest.ValidFrom }
+                equals new { rate.TaxCategory, rate.ValidFrom }
+            orderby rate.TaxCategory
+            select new TaxRateSummary(
+                rate.TaxCategory,
+                rate.TaxCategoryName,
+                rate.AccountingCategory,
+                rate.Rate,
+                rate.ValidFrom))
             .ToListAsync(cancellationToken);
 
         return Results.Ok(taxRates);
     }
 
-    private static async Task<IResult> CreateTaxRate(
+    private static async Task<IResult> GetTaxRate(
         AppDbContext dbContext,
-        CreateTaxRateRequest request,
+        IBusinessClock businessClock,
+        string taxCategory,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
-        var errors = TaxRateValidation.ValidateCreateTaxRate(request);
+        var categoryError = ValidateTaxCategoryRoute(taxCategory);
+        if (categoryError is not null)
+        {
+            return categoryError;
+        }
+
+        var category = taxCategory.Trim();
+        var date = (asOf ?? businessClock.Today).Date;
+        var taxRate = await dbContext.TaxRates
+            .AsNoTracking()
+            .Where(rate => rate.TaxCategory == category && rate.ValidFrom <= date)
+            .OrderByDescending(rate => rate.ValidFrom)
+            .ThenByDescending(rate => rate.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (taxRate is null)
+        {
+            return Results.NotFound(new { message = "指定日時点で利用できる税率情報がありません。" });
+        }
+
+        return Results.Ok(ToSummary(taxRate));
+    }
+
+    private static async Task<IResult> GetTaxRateChanges(
+        AppDbContext dbContext,
+        string taxCategory,
+        CancellationToken cancellationToken)
+    {
+        var categoryError = ValidateTaxCategoryRoute(taxCategory);
+        if (categoryError is not null)
+        {
+            return categoryError;
+        }
+
+        var category = taxCategory.Trim();
+        var changes = await dbContext.TaxRates
+            .AsNoTracking()
+            .Where(rate => rate.TaxCategory == category)
+            .OrderByDescending(rate => rate.ValidFrom)
+            .ThenByDescending(rate => rate.Id)
+            .Select(rate => new TaxRateChange(
+                rate.TaxCategory,
+                rate.TaxCategoryName,
+                rate.AccountingCategory,
+                rate.Rate,
+                rate.ValidFrom))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(changes);
+    }
+
+    private static async Task<IResult> ChangeTaxRate(
+        AppDbContext dbContext,
+        string taxCategory,
+        ChangeTaxRateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var category = taxCategory?.Trim() ?? string.Empty;
+        var errors = TaxRateValidation.ValidateChangeTaxRate(category, request);
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
         }
 
-        var taxCategory = request.TaxCategory!.Trim();
-        TaxCategories.TryGet(taxCategory, out var taxCategoryDefinition);
-        var validFrom = request.ValidFrom.Date;
-
+        var effectiveFrom = request.EffectiveFrom.Date;
         var taxRateExists = await dbContext.TaxRates.AnyAsync(
-            taxRate => taxRate.TaxCategory == taxCategory && taxRate.ValidFrom == validFrom,
+            rate => rate.TaxCategory == category && rate.ValidFrom == effectiveFrom,
             cancellationToken);
 
         if (taxRateExists)
         {
-            return Results.Conflict(new { message = "同じ税区分と適用開始日の税率が既に存在します。" });
+            return Results.Conflict(new { message = "同じ適用開始日の税率情報は既に登録されています。" });
         }
 
+        TaxCategories.TryGet(category, out var taxCategoryDefinition);
         var taxRate = new TaxRate
         {
-            TaxCategory = taxCategory,
-            TaxCategoryName = taxCategoryDefinition.Name,
+            TaxCategory = category,
+            TaxCategoryName = taxCategoryDefinition!.Name,
             AccountingCategory = taxCategoryDefinition.AccountingCategory,
             Rate = request.Rate,
-            ValidFrom = validFrom
+            ValidFrom = effectiveFrom
         };
 
         dbContext.TaxRates.Add(taxRate);
@@ -105,61 +164,41 @@ public static class TaxRateEndpoints
             return Results.Conflict(new { message = "税率の一意制約に違反しました。" });
         }
 
-        return Results.Created($"/api/tax-rates/{taxRate.Id}", ToTaxRateResponse(taxRate));
+        return Results.Ok(ToSummary(taxRate));
     }
 
-    private static async Task<IResult> PreviewTaxRate(
-        AppDbContext dbContext,
-        string? taxCategory,
-        DateTime targetDate,
-        CancellationToken cancellationToken)
+    private static IResult? ValidateTaxCategoryRoute(string? taxCategory)
     {
-        var errors = new Dictionary<string, string[]>();
-
         if (string.IsNullOrWhiteSpace(taxCategory))
         {
-            errors[nameof(taxCategory)] = ["税区分は必須です。"];
-        }
-        else if (taxCategory.Length > 30)
-        {
-            errors[nameof(taxCategory)] = ["30文字以内で指定してください。"];
-        }
-        else if (!TaxCategories.TryGet(taxCategory.Trim(), out _))
-        {
-            errors[nameof(taxCategory)] = ["未知の税区分です。"];
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["taxCategory"] = ["税区分は必須です。"]
+            });
         }
 
-        if (targetDate == default)
+        if (taxCategory.Length > 30)
         {
-            errors[nameof(targetDate)] = ["対象日は必須です。"];
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["taxCategory"] = ["30文字以内で指定してください。"]
+            });
         }
 
-        if (errors.Count > 0)
+        if (!TaxCategories.TryGet(taxCategory.Trim(), out _))
         {
-            return Results.ValidationProblem(errors);
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["taxCategory"] = ["未知の税区分です。"]
+            });
         }
 
-        var category = taxCategory!.Trim();
-        var date = targetDate.Date;
-        var taxRate = await dbContext.TaxRates
-            .AsNoTracking()
-            .Where(taxRate => taxRate.TaxCategory == category && taxRate.ValidFrom <= date)
-            .OrderByDescending(taxRate => taxRate.ValidFrom)
-            .ThenByDescending(taxRate => taxRate.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (taxRate is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる税率がありません。" });
-        }
-
-        return Results.Ok(ToTaxRateResponse(taxRate));
+        return null;
     }
 
-    private static TaxRateResponse ToTaxRateResponse(TaxRate taxRate)
+    private static TaxRateSummary ToSummary(TaxRate taxRate)
     {
-        return new TaxRateResponse(
-            taxRate.Id,
+        return new TaxRateSummary(
             taxRate.TaxCategory,
             taxRate.TaxCategoryName,
             taxRate.AccountingCategory,

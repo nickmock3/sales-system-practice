@@ -17,14 +17,14 @@ public static class ProductEndpoints
         group.MapPost("/", CreateProduct)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
-        group.MapGet("/{productId:long}/versions", GetProductVersions)
+        group.MapGet("/{productId:long}", GetProduct)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
-        group.MapPost("/{productId:long}/versions", CreateProductVersion)
+        group.MapGet("/{productId:long}/changes", GetProductChanges)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
+        group.MapPost("/{productId:long}/changes", ChangeProduct)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
-
-        group.MapGet("/{productId:long}/preview", PreviewProduct)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
         return endpoints;
     }
@@ -75,10 +75,9 @@ public static class ProductEndpoints
 
         var products = await query
             .OrderBy(item => item.product.ProductCode)
-            .Select(item => new ProductListItemResponse(
+            .Select(item => new ProductSummary(
                 item.product.Id,
                 item.product.ProductCode,
-                item.version.Id,
                 item.version.Name,
                 item.version.Unit,
                 item.version.StandardUnitPrice,
@@ -102,7 +101,7 @@ public static class ProductEndpoints
         }
 
         var productCode = request.ProductCode!.Trim();
-        var validFrom = request.ValidFrom.Date;
+        var effectiveFrom = request.EffectiveFrom.Date;
 
         var codeExists = await dbContext.Products
             .AnyAsync(product => product.ProductCode == productCode, cancellationToken);
@@ -125,7 +124,7 @@ public static class ProductEndpoints
             StandardUnitPrice = request.StandardUnitPrice,
             TaxCategory = request.TaxCategory!.Trim(),
             IsDiscontinued = request.IsDiscontinued,
-            ValidFrom = validFrom
+            ValidFrom = effectiveFrom
         });
 
         dbContext.Products.Add(product);
@@ -140,12 +139,14 @@ public static class ProductEndpoints
         }
 
         var version = product.Versions[0];
-        return Results.Created($"/api/products/{product.Id}", ToProductResponse(product, version));
+        return Results.Created($"/api/products/{product.Id}", ToSummary(product, version));
     }
 
-    private static async Task<IResult> GetProductVersions(
+    private static async Task<IResult> GetProduct(
         AppDbContext dbContext,
+        IBusinessClock businessClock,
         long productId,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
         var product = await dbContext.Products
@@ -159,54 +160,84 @@ public static class ProductEndpoints
             return Results.NotFound(new { message = "商品が見つかりません。" });
         }
 
-        var versions = await dbContext.ProductVersions
+        var date = (asOf ?? businessClock.Today).Date;
+        var version = await dbContext.ProductVersions
+            .AsNoTracking()
+            .Where(version => version.ProductId == productId && version.ValidFrom <= date)
+            .OrderByDescending(version => version.ValidFrom)
+            .ThenByDescending(version => version.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (version is null)
+        {
+            return Results.NotFound(new { message = "指定日時点で利用できる商品情報がありません。" });
+        }
+
+        return Results.Ok(ToSummary(product, version));
+    }
+
+    private static async Task<IResult> GetProductChanges(
+        AppDbContext dbContext,
+        long productId,
+        CancellationToken cancellationToken)
+    {
+        var productExists = await dbContext.Products
+            .AsNoTracking()
+            .AnyAsync(product => product.Id == productId, cancellationToken);
+
+        if (!productExists)
+        {
+            return Results.NotFound(new { message = "商品が見つかりません。" });
+        }
+
+        var changes = await dbContext.ProductVersions
             .AsNoTracking()
             .Where(version => version.ProductId == productId)
             .OrderByDescending(version => version.ValidFrom)
             .ThenByDescending(version => version.Id)
-            .Select(version => new ProductVersionResponse(
-                version.Id,
-                version.ProductId,
-                product.ProductCode,
+            .Select(version => new ProductChange(
+                version.ValidFrom,
                 version.Name,
                 version.Unit,
                 version.StandardUnitPrice,
                 version.TaxCategory,
-                version.IsDiscontinued,
-                version.ValidFrom))
+                version.IsDiscontinued))
             .ToListAsync(cancellationToken);
 
-        return Results.Ok(versions);
+        return Results.Ok(changes);
     }
 
-    private static async Task<IResult> CreateProductVersion(
+    private static async Task<IResult> ChangeProduct(
         AppDbContext dbContext,
         long productId,
-        CreateProductVersionRequest request,
+        ChangeProductRequest request,
         CancellationToken cancellationToken)
     {
-        var errors = ProductValidation.ValidateCreateProductVersion(request);
+        var errors = ProductValidation.ValidateChangeProduct(request);
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
         }
 
         var product = await dbContext.Products
-            .FirstOrDefaultAsync(product => product.Id == productId, cancellationToken);
+            .AsNoTracking()
+            .Where(product => product.Id == productId)
+            .Select(product => new ProductIdentity(product.Id, product.ProductCode))
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (product is null)
         {
             return Results.NotFound(new { message = "商品が見つかりません。" });
         }
 
-        var validFrom = request.ValidFrom.Date;
+        var effectiveFrom = request.EffectiveFrom.Date;
         var versionExists = await dbContext.ProductVersions.AnyAsync(
-            version => version.ProductId == productId && version.ValidFrom == validFrom,
+            version => version.ProductId == productId && version.ValidFrom == effectiveFrom,
             cancellationToken);
 
         if (versionExists)
         {
-            return Results.Conflict(new { message = "同じ適用開始日の商品履歴が既に存在します。" });
+            return Results.Conflict(new { message = "同じ適用開始日の商品情報は既に登録されています。" });
         }
 
         var version = new ProductVersion
@@ -217,7 +248,7 @@ public static class ProductEndpoints
             StandardUnitPrice = request.StandardUnitPrice,
             TaxCategory = request.TaxCategory!.Trim(),
             IsDiscontinued = request.IsDiscontinued,
-            ValidFrom = validFrom
+            ValidFrom = effectiveFrom
         };
 
         dbContext.ProductVersions.Add(version);
@@ -231,68 +262,12 @@ public static class ProductEndpoints
             return Results.Conflict(new { message = "商品履歴の一意制約に違反しました。" });
         }
 
-        return Results.Created($"/api/products/{productId}/versions/{version.Id}", ToProductVersionResponse(product, version));
+        return Results.Ok(ToSummary(product, version));
     }
 
-    private static async Task<IResult> PreviewProduct(
-        AppDbContext dbContext,
-        long productId,
-        DateTime targetDate,
-        CancellationToken cancellationToken)
+    private static ProductSummary ToSummary(Product product, ProductVersion version)
     {
-        if (targetDate == default)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                [nameof(targetDate)] = ["対象日は必須です。"]
-            });
-        }
-
-        var product = await dbContext.Products
-            .AsNoTracking()
-            .Where(product => product.Id == productId)
-            .Select(product => new ProductIdentity(product.Id, product.ProductCode))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (product is null)
-        {
-            return Results.NotFound(new { message = "商品が見つかりません。" });
-        }
-
-        var date = targetDate.Date;
-        var version = await dbContext.ProductVersions
-            .AsNoTracking()
-            .Where(version => version.ProductId == productId && version.ValidFrom <= date)
-            .OrderByDescending(version => version.ValidFrom)
-            .ThenByDescending(version => version.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (version is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる商品履歴がありません。" });
-        }
-
-        return Results.Ok(ToProductVersionResponse(product, version));
-    }
-
-    private static ProductResponse ToProductResponse(Product product, ProductVersion version)
-    {
-        return new ProductResponse(
-            product.Id,
-            product.ProductCode,
-            version.Id,
-            version.Name,
-            version.Unit,
-            version.StandardUnitPrice,
-            version.TaxCategory,
-            version.IsDiscontinued,
-            version.ValidFrom);
-    }
-
-    private static ProductVersionResponse ToProductVersionResponse(Product product, ProductVersion version)
-    {
-        return new ProductVersionResponse(
-            version.Id,
+        return new ProductSummary(
             product.Id,
             product.ProductCode,
             version.Name,
@@ -303,12 +278,9 @@ public static class ProductEndpoints
             version.ValidFrom);
     }
 
-    private static ProductVersionResponse ToProductVersionResponse(
-        ProductIdentity product,
-        ProductVersion version)
+    private static ProductSummary ToSummary(ProductIdentity product, ProductVersion version)
     {
-        return new ProductVersionResponse(
-            version.Id,
+        return new ProductSummary(
             product.Id,
             product.ProductCode,
             version.Name,

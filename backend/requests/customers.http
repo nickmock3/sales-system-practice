@@ -22,15 +22,19 @@ X-Dummy-Roles: {{masterRoles}}
   "name": "株式会社サンプル",
   "address": "東京都千代田区1-1-1",
   "phoneNumber": "03-1234-5678",
-  "validFrom": "2026-01-01"
+  "effectiveFrom": "2026-01-01"
 }
 
-### 得意先履歴一覧
-GET {{baseUrl}}/api/customers/1/versions
+### 指定日時点の得意先情報
+GET {{baseUrl}}/api/customers/1?asOf=2026-04-15
 X-Dummy-User: {{user}}
 
-### 得意先履歴追加
-POST {{baseUrl}}/api/customers/1/versions
+### 得意先変更履歴一覧
+GET {{baseUrl}}/api/customers/1/changes
+X-Dummy-User: {{user}}
+
+### 指定日からの得意先情報変更
+POST {{baseUrl}}/api/customers/1/changes
 Content-Type: application/json
 X-Dummy-User: {{masterUser}}
 X-Dummy-Roles: {{masterRoles}}
@@ -39,9 +43,5 @@ X-Dummy-Roles: {{masterRoles}}
   "name": "株式会社サンプル 営業部",
   "address": "東京都中央区2-2-2",
   "phoneNumber": "03-2345-6789",
-  "validFrom": "2026-04-01"
+  "effectiveFrom": "2026-04-01"
 }
-
-### 指定日プレビュー
-GET {{baseUrl}}/api/customers/1/preview?targetDate=2026-04-15
-X-Dummy-User: {{user}}

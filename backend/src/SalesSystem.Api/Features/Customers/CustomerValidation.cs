@@ -4,31 +4,31 @@ internal static class CustomerValidation
 {
     public static Dictionary<string, string[]> ValidateCreateCustomer(CreateCustomerRequest request)
     {
-        var errors = ValidateVersionFields(
+        var errors = ValidateChangeFields(
             request.Name,
             request.Address,
             request.PhoneNumber,
-            request.ValidFrom);
+            request.EffectiveFrom);
 
         AddRequiredString(errors, nameof(request.CustomerCode), request.CustomerCode, 30);
 
         return errors;
     }
 
-    public static Dictionary<string, string[]> ValidateCreateCustomerVersion(CreateCustomerVersionRequest request)
+    public static Dictionary<string, string[]> ValidateChangeCustomer(ChangeCustomerRequest request)
     {
-        return ValidateVersionFields(
+        return ValidateChangeFields(
             request.Name,
             request.Address,
             request.PhoneNumber,
-            request.ValidFrom);
+            request.EffectiveFrom);
     }
 
-    private static Dictionary<string, string[]> ValidateVersionFields(
+    private static Dictionary<string, string[]> ValidateChangeFields(
         string? name,
         string? address,
         string? phoneNumber,
-        DateTime validFrom)
+        DateTime effectiveFrom)
     {
         var errors = new Dictionary<string, string[]>();
 
@@ -36,9 +36,9 @@ internal static class CustomerValidation
         AddRequiredString(errors, nameof(CreateCustomerRequest.Address), address, 300);
         AddRequiredString(errors, nameof(CreateCustomerRequest.PhoneNumber), phoneNumber, 30);
 
-        if (validFrom == default)
+        if (effectiveFrom == default)
         {
-            errors[nameof(CreateCustomerRequest.ValidFrom)] = ["適用開始日は必須です。"];
+            errors[nameof(CreateCustomerRequest.EffectiveFrom)] = ["適用開始日は必須です。"];
         }
 
         return errors;

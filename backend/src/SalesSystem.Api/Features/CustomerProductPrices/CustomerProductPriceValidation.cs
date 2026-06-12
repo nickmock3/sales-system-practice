@@ -5,7 +5,7 @@ internal static class CustomerProductPriceValidation
     public static Dictionary<string, string[]> ValidateCreateCustomerProductPrice(
         CreateCustomerProductPriceRequest request)
     {
-        var errors = ValidatePriceFields(request.UnitPrice, request.ValidFrom);
+        var errors = ValidatePriceFields(request.UnitPrice, request.EffectiveFrom);
 
         if (request.CustomerId <= 0)
         {
@@ -20,12 +20,12 @@ internal static class CustomerProductPriceValidation
         return errors;
     }
 
-    public static Dictionary<string, string[]> ValidateCreateCustomerProductPriceHistory(
+    public static Dictionary<string, string[]> ValidateChangeCustomerProductPrice(
         long customerId,
         long productId,
-        CreateCustomerProductPriceHistoryRequest request)
+        ChangeCustomerProductPriceRequest request)
     {
-        var errors = ValidatePriceFields(request.UnitPrice, request.ValidFrom);
+        var errors = ValidatePriceFields(request.UnitPrice, request.EffectiveFrom);
 
         if (customerId <= 0)
         {
@@ -57,7 +57,7 @@ internal static class CustomerProductPriceValidation
         return errors;
     }
 
-    public static Dictionary<string, string[]> ValidatePreview(long customerId, long productId, DateTime targetDate)
+    public static Dictionary<string, string[]> ValidatePreview(long customerId, long productId, DateTime? asOf)
     {
         var errors = new Dictionary<string, string[]>();
 
@@ -71,15 +71,15 @@ internal static class CustomerProductPriceValidation
             errors[nameof(productId)] = ["商品IDは1以上で指定してください。"];
         }
 
-        if (targetDate == default)
+        if (asOf is { } value && value == default)
         {
-            errors[nameof(targetDate)] = ["対象日は必須です。"];
+            errors["asOf"] = ["対象日は必須です。"];
         }
 
         return errors;
     }
 
-    private static Dictionary<string, string[]> ValidatePriceFields(decimal unitPrice, DateTime validFrom)
+    private static Dictionary<string, string[]> ValidatePriceFields(decimal unitPrice, DateTime effectiveFrom)
     {
         var errors = new Dictionary<string, string[]>();
 
@@ -92,9 +92,9 @@ internal static class CustomerProductPriceValidation
             errors[nameof(CreateCustomerProductPriceRequest.UnitPrice)] = ["単価は小数2桁までで指定してください。"];
         }
 
-        if (validFrom == default)
+        if (effectiveFrom == default)
         {
-            errors[nameof(CreateCustomerProductPriceRequest.ValidFrom)] = ["適用開始日は必須です。"];
+            errors[nameof(CreateCustomerProductPriceRequest.EffectiveFrom)] = ["適用開始日は必須です。"];
         }
 
         return errors;

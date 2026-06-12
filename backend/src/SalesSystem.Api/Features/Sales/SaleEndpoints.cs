@@ -429,8 +429,7 @@ public static class SaleEndpoints
             return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
         }
 
-        return Results.Ok(new CustomerVersionResponse(
-            version.Id,
+        return Results.Ok(new CustomerSummary(
             customer.Id,
             customer.CustomerCode,
             version.Name,

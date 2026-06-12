@@ -31,7 +31,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             customerId,
             productId,
             unitPrice = 100.00m,
-            validFrom = "2026-04-01"
+            effectiveFrom = "2026-04-01"
         });
         var created = await response.Content.ReadFromJsonAsync<CustomerProductPriceResponse>();
 
@@ -40,13 +40,13 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         Assert.Equal(customerId, created.CustomerId);
         Assert.Equal(productId, created.ProductId);
         Assert.Equal(100.00m, created.UnitPrice);
-        Assert.Equal(new DateTime(2026, 4, 1), created.ValidFrom);
+        Assert.Equal(new DateTime(2026, 4, 1), created.EffectiveFrom);
     }
 
     [Fact]
-    public async Task CreateCustomerProductPrice_WithDuplicateValidFrom_ReturnsConflict()
+    public async Task CreateCustomerProductPrice_WithExistingCombination_ReturnsConflict()
     {
-        // 同じ得意先、商品、適用開始日の単価履歴は重複登録できないことを確認する。
+        // 同じ得意先と商品の組み合わせを再登録すると競合エラーになることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
@@ -56,14 +56,62 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             customerId,
             productId,
             unitPrice = 100.00m,
-            validFrom = "2026-04-01"
+            effectiveFrom = "2026-04-01"
         };
 
         using var first = await client.PostAsJsonAsync("/api/customer-product-prices", request);
-        using var second = await client.PostAsJsonAsync("/api/customer-product-prices", request);
+        using var second = await client.PostAsJsonAsync("/api/customer-product-prices", new
+        {
+            customerId,
+            productId,
+            unitPrice = 90.00m,
+            effectiveFrom = "2026-05-01"
+        });
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateCustomerProductPrice_WithDuplicateEffectiveFrom_ReturnsConflict()
+    {
+        // 同じ得意先、商品、適用開始日の単価履歴は重複登録できないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
+        var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
+        await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
+        var request = new
+        {
+            unitPrice = 90.00m,
+            effectiveFrom = "2026-04-01"
+        };
+
+        using var response = await client.PostAsJsonAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}/changes",
+            request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangeCustomerProductPrice_WithoutExistingCombination_ReturnsNotFound()
+    {
+        // 未登録の得意先と商品の組み合わせは変更 API では初回登録できないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
+        var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}/changes",
+            new
+            {
+                unitPrice = 90.00m,
+                effectiveFrom = "2026-05-01"
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
@@ -78,14 +126,36 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             customerId = 0,
             productId = 0,
             unitPrice = 10.123m,
-            validFrom = ""
+            effectiveFrom = ""
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateCustomerProductPriceVersion_AddsHistoryWithoutUpdatingExistingPrice()
+    public async Task CreateCustomerProductPrice_ResponseDoesNotContainCustomerProductPriceId()
+    {
+        // 通常レスポンスに内部履歴 ID が含まれないことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
+        var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
+
+        using var response = await client.PostAsJsonAsync("/api/customer-product-prices", new
+        {
+            customerId,
+            productId,
+            unitPrice = 100.00m,
+            effectiveFrom = "2026-04-01"
+        });
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.DoesNotContain("customerProductPriceId", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChangeCustomerProductPrice_AddsHistoryWithoutUpdatingExistingPrice()
     {
         // 得意先別商品単価の履歴追加時に既存履歴を更新せず新しい履歴として保存されることを確認する。
         await ResetDatabaseAsync();
@@ -94,23 +164,26 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
         await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
 
-        using var response = await client.PostAsJsonAsync($"/api/customer-product-prices/{customerId}/{productId}/versions", new
-        {
-            unitPrice = 90.00m,
-            validFrom = "2026-05-01"
-        });
+        using var response = await client.PostAsJsonAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}/changes",
+            new
+            {
+                unitPrice = 90.00m,
+                effectiveFrom = "2026-05-01"
+            });
 
-        using var versionsResponse = await client.GetAsync($"/api/customer-product-prices/{customerId}/{productId}/versions");
-        var versions = await versionsResponse.Content.ReadFromJsonAsync<List<CustomerProductPriceResponse>>();
+        using var changesResponse = await client.GetAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}/changes");
+        var changes = await changesResponse.Content.ReadFromJsonAsync<List<CustomerProductPriceChangeResponse>>();
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, versionsResponse.StatusCode);
-        Assert.NotNull(versions);
-        Assert.Equal(2, versions.Count);
-        Assert.Equal(90.00m, versions[0].UnitPrice);
-        Assert.Equal(new DateTime(2026, 5, 1), versions[0].ValidFrom);
-        Assert.Equal(100.00m, versions[1].UnitPrice);
-        Assert.Equal(new DateTime(2026, 4, 1), versions[1].ValidFrom);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, changesResponse.StatusCode);
+        Assert.NotNull(changes);
+        Assert.Equal(2, changes.Count);
+        Assert.Equal(90.00m, changes[0].UnitPrice);
+        Assert.Equal(new DateTime(2026, 5, 1), changes[0].EffectiveFrom);
+        Assert.Equal(100.00m, changes[1].UnitPrice);
+        Assert.Equal(new DateTime(2026, 4, 1), changes[1].EffectiveFrom);
     }
 
     [Fact]
@@ -128,7 +201,8 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         await CreateCustomerProductPriceAsync(client, targetCustomerId, targetProductId, 100.00m, "2026-04-01");
         await CreateCustomerProductPriceAsync(client, otherCustomerId, otherProductId, 80.00m, "2026-04-01");
 
-        using var response = await client.GetAsync($"/api/customer-product-prices?customerId={targetCustomerId}&productId={targetProductId}&customerCode={targetCustomerCode}&productCode={targetProductCode}");
+        using var response = await client.GetAsync(
+            $"/api/customer-product-prices?customerId={targetCustomerId}&productId={targetProductId}&customerCode={targetCustomerCode}&productCode={targetProductCode}&asOf=2026-04-15");
         var prices = await response.Content.ReadFromJsonAsync<List<CustomerProductPriceListItemResponse>>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -140,6 +214,48 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
     }
 
     [Fact]
+    public async Task GetCustomerProductPrices_ReturnsOnePricePerCombinationAtAsOf()
+    {
+        // 指定日時点で得意先と商品の組み合わせごとに1件ずつ適用単価が返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
+        var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
+        await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
+        await ChangeCustomerProductPriceAsync(client, customerId, productId, 90.00m, "2026-05-01");
+
+        using var response = await client.GetAsync("/api/customer-product-prices?asOf=2026-04-15");
+        var prices = await response.Content.ReadFromJsonAsync<List<CustomerProductPriceListItemResponse>>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(prices);
+        var price = Assert.Single(prices);
+        Assert.Equal(100.00m, price.UnitPrice);
+        Assert.Equal(new DateTime(2026, 4, 1), price.EffectiveFrom);
+    }
+
+    [Fact]
+    public async Task GetCustomerProductPrice_ReturnsLatestPriceOnOrBeforeAsOf()
+    {
+        // 指定日以前で一番新しい得意先別商品単価が詳細結果として返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
+        var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
+        await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
+        await ChangeCustomerProductPriceAsync(client, customerId, productId, 90.00m, "2026-05-01");
+
+        using var response = await client.GetAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}?asOf=2026-04-15");
+        var detail = await response.Content.ReadFromJsonAsync<CustomerProductPriceResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(detail);
+        Assert.Equal(100.00m, detail.UnitPrice);
+        Assert.Equal(new DateTime(2026, 4, 1), detail.EffectiveFrom);
+    }
+
+    [Fact]
     public async Task PreviewCustomerProductPrice_WithCustomerPrice_ReturnsLatestCustomerPrice()
     {
         // 指定日以前で一番新しい得意先別商品単価がプレビュー結果として返ることを確認する。
@@ -148,17 +264,17 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
         var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
         await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
-        var latest = await CreateCustomerProductPriceAsync(client, customerId, productId, 90.00m, "2026-05-01");
+        await ChangeCustomerProductPriceAsync(client, customerId, productId, 90.00m, "2026-05-01");
 
-        using var response = await client.GetAsync($"/api/customer-product-prices/preview?customerId={customerId}&productId={productId}&targetDate=2026-05-15");
+        using var response = await client.GetAsync(
+            $"/api/customer-product-prices/preview?customerId={customerId}&productId={productId}&asOf=2026-05-15");
         var preview = await response.Content.ReadFromJsonAsync<CustomerProductPricePreviewResponse>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(preview);
         Assert.Equal(90.00m, preview.AutoUnitPrice);
-        Assert.Equal(latest.CustomerProductPriceId, preview.CustomerProductPriceId);
-        Assert.Equal("CustomerProductPrice", preview.UnitPriceSource);
-        Assert.Equal(new DateTime(2026, 5, 1), preview.CustomerProductPriceValidFrom);
+        Assert.Equal("CUSTOMER_PRODUCT_PRICE", preview.UnitPriceSource);
+        Assert.Equal(new DateTime(2026, 5, 15), preview.AsOf);
     }
 
     [Fact]
@@ -170,14 +286,15 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
         var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
 
-        using var response = await client.GetAsync($"/api/customer-product-prices/preview?customerId={customerId}&productId={productId}&targetDate=2026-04-15");
+        using var response = await client.GetAsync(
+            $"/api/customer-product-prices/preview?customerId={customerId}&productId={productId}&asOf=2026-04-15");
         var preview = await response.Content.ReadFromJsonAsync<CustomerProductPricePreviewResponse>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(preview);
         Assert.Equal(120.00m, preview.AutoUnitPrice);
-        Assert.Null(preview.CustomerProductPriceId);
-        Assert.Equal("ProductStandard", preview.UnitPriceSource);
+        Assert.Equal("PRODUCT_STANDARD", preview.UnitPriceSource);
+        Assert.Equal(120.00m, preview.StandardUnitPrice);
     }
 
     [Fact]
@@ -189,7 +306,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var customerId = await CreateCustomerAsync(client, NewCustomerCode(), "得意先A", "2026-01-01");
         var productId = await CreateProductAsync(client, NewProductCode(), "商品A", 120.00m, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
-        var firstPrice = await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
+        await CreateCustomerProductPriceAsync(client, customerId, productId, 100.00m, "2026-04-01");
 
         using var saleResponse = await client.PostAsJsonAsync("/api/sales", new
         {
@@ -206,7 +323,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             }
         });
         var sale = await saleResponse.Content.ReadFromJsonAsync<SaleResponse>();
-        await CreateCustomerProductPriceAsync(client, customerId, productId, 80.00m, "2026-05-01");
+        await ChangeCustomerProductPriceAsync(client, customerId, productId, 80.00m, "2026-05-01");
 
         using var detailResponse = await client.GetAsync($"/api/sales/{sale!.SaleId}");
         var detailSale = await detailResponse.Content.ReadFromJsonAsync<SaleResponse>();
@@ -217,7 +334,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var detail = Assert.Single(detailSale.Details);
         Assert.Equal(100.00m, detail.UnitPrice);
         Assert.Equal(100.00m, detail.AutoUnitPrice);
-        Assert.Equal(firstPrice.CustomerProductPriceId, detail.CustomerProductPriceId);
+        Assert.NotNull(detail.CustomerProductPriceId);
         Assert.False(detail.IsManualUnitPrice);
     }
 
@@ -236,7 +353,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             customerId = 1,
             productId = 1,
             unitPrice = 100.00m,
-            validFrom = "2026-04-01"
+            effectiveFrom = "2026-04-01"
         });
 
         Assert.Equal(HttpStatusCode.Unauthorized, unauthorizedResponse.StatusCode);
@@ -254,7 +371,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         HttpClient client,
         string customerCode,
         string name,
-        string validFrom)
+        string effectiveFrom)
     {
         using var response = await client.PostAsJsonAsync("/api/customers", new
         {
@@ -262,7 +379,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             name,
             address = "東京都千代田区1-1-1",
             phoneNumber = "03-1234-5678",
-            validFrom
+            effectiveFrom
         });
 
         response.EnsureSuccessStatusCode();
@@ -275,7 +392,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         string productCode,
         string name,
         decimal standardUnitPrice,
-        string validFrom)
+        string effectiveFrom)
     {
         using var response = await client.PostAsJsonAsync("/api/products", new
         {
@@ -285,7 +402,7 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
             standardUnitPrice,
             taxCategory = "STANDARD",
             isDiscontinued = false,
-            validFrom
+            effectiveFrom
         });
 
         response.EnsureSuccessStatusCode();
@@ -298,31 +415,48 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         long customerId,
         long productId,
         decimal unitPrice,
-        string validFrom)
+        string effectiveFrom)
     {
         using var response = await client.PostAsJsonAsync("/api/customer-product-prices", new
         {
             customerId,
             productId,
             unitPrice,
-            validFrom
+            effectiveFrom
         });
 
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<CustomerProductPriceResponse>())!;
     }
 
+    private static async Task ChangeCustomerProductPriceAsync(
+        HttpClient client,
+        long customerId,
+        long productId,
+        decimal unitPrice,
+        string effectiveFrom)
+    {
+        using var response = await client.PostAsJsonAsync(
+            $"/api/customer-product-prices/{customerId}/{productId}/changes",
+            new
+            {
+                unitPrice,
+                effectiveFrom
+            });
+
+        response.EnsureSuccessStatusCode();
+    }
+
     private static async Task CreateTaxRateAsync(
         HttpClient client,
         string taxCategory,
         decimal rate,
-        string validFrom)
+        string effectiveFrom)
     {
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync($"/api/tax-rates/{taxCategory}/changes", new
         {
-            taxCategory,
             rate,
-            validFrom
+            effectiveFrom
         });
 
         if (response.StatusCode != HttpStatusCode.Conflict)
@@ -354,7 +488,6 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
     private sealed record ProductResponse(long ProductId);
 
     private sealed record CustomerProductPriceListItemResponse(
-        long CustomerProductPriceId,
         long CustomerId,
         string CustomerCode,
         string CustomerName,
@@ -362,11 +495,10 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         string ProductCode,
         string ProductName,
         decimal UnitPrice,
-        DateTime ValidFrom,
+        DateTime EffectiveFrom,
         DateTime CreatedAt);
 
     private sealed record CustomerProductPriceResponse(
-        long CustomerProductPriceId,
         long CustomerId,
         string CustomerCode,
         string CustomerName,
@@ -374,26 +506,26 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         string ProductCode,
         string ProductName,
         decimal UnitPrice,
-        DateTime ValidFrom,
+        DateTime EffectiveFrom,
+        DateTime CreatedAt);
+
+    private sealed record CustomerProductPriceChangeResponse(
+        decimal UnitPrice,
+        DateTime EffectiveFrom,
         DateTime CreatedAt);
 
     private sealed record CustomerProductPricePreviewResponse(
         long CustomerId,
         string CustomerCode,
-        long CustomerVersionId,
         string CustomerName,
         long ProductId,
         string ProductCode,
-        long ProductVersionId,
         string ProductName,
         string Unit,
         decimal AutoUnitPrice,
         string UnitPriceSource,
-        long? CustomerProductPriceId,
-        DateTime? CustomerProductPriceValidFrom,
         decimal StandardUnitPrice,
-        DateTime ProductVersionValidFrom,
-        DateTime TargetDate);
+        DateTime AsOf);
 
     private sealed record SaleResponse(
         long SaleId,

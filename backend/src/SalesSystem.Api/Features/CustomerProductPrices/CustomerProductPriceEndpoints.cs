@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
 using SalesSystem.Api.Domain.Entities;
+using SalesSystem.Api.Features.Products;
+using SalesSystem.Api.Features.Shared;
 using SalesSystem.Api.Persistence;
 
 namespace SalesSystem.Api.Features.CustomerProductPrices;
@@ -11,25 +13,22 @@ public static class CustomerProductPriceEndpoints
     {
         var group = endpoints.MapGroup("/api/customer-product-prices");
 
+        group.MapGet("/preview", PreviewCustomerProductPrice)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
         group.MapGet("/", GetCustomerProductPrices)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
         group.MapPost("/", CreateCustomerProductPrice)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
-        group.MapGet("/{customerId:long}/{productId:long}/history", GetCustomerProductPriceHistory)
+        group.MapGet("/{customerId:long}/{productId:long}/changes", GetCustomerProductPriceChanges)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
-        group.MapPost("/{customerId:long}/{productId:long}/history", CreateCustomerProductPriceHistory)
+        group.MapPost("/{customerId:long}/{productId:long}/changes", ChangeCustomerProductPrice)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
-        group.MapGet("/{customerId:long}/{productId:long}/versions", GetCustomerProductPriceHistory)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
-
-        group.MapPost("/{customerId:long}/{productId:long}/versions", CreateCustomerProductPriceHistory)
-            .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
-
-        group.MapGet("/preview", PreviewCustomerProductPrice)
+        group.MapGet("/{customerId:long}/{productId:long}", GetCustomerProductPrice)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
         return endpoints;
@@ -37,10 +36,12 @@ public static class CustomerProductPriceEndpoints
 
     private static async Task<IResult> GetCustomerProductPrices(
         AppDbContext dbContext,
+        IBusinessClock businessClock,
         long? customerId,
         long? productId,
         string? customerCode,
         string? productCode,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
         var errors = CustomerProductPriceValidation.ValidateListFilters(customerId, productId);
@@ -49,7 +50,25 @@ public static class CustomerProductPriceEndpoints
             return Results.ValidationProblem(errors);
         }
 
-        var query = dbContext.CustomerProductPrices.AsNoTracking();
+        var date = (asOf ?? businessClock.Today).Date;
+
+        var latestValidFromByCombination =
+            from price in dbContext.CustomerProductPrices.AsNoTracking()
+            where price.ValidFrom <= date
+            group price by new { price.CustomerId, price.ProductId } into grouped
+            select new
+            {
+                grouped.Key.CustomerId,
+                grouped.Key.ProductId,
+                ValidFrom = grouped.Max(price => price.ValidFrom)
+            };
+
+        var query =
+            from latest in latestValidFromByCombination
+            join price in dbContext.CustomerProductPrices.AsNoTracking()
+                on new { latest.CustomerId, latest.ProductId, latest.ValidFrom }
+                equals new { price.CustomerId, price.ProductId, price.ValidFrom }
+            select price;
 
         if (customerId is not null)
         {
@@ -74,10 +93,7 @@ public static class CustomerProductPriceEndpoints
         var prices = await query
             .OrderBy(price => price.CustomerId)
             .ThenBy(price => price.ProductId)
-            .ThenByDescending(price => price.ValidFrom)
-            .ThenByDescending(price => price.Id)
-            .Select(price => new CustomerProductPriceListItemResponse(
-                price.Id,
+            .Select(price => new CustomerProductPriceSummary(
                 price.CustomerId,
                 price.Customer.CustomerCode,
                 dbContext.CustomerVersions
@@ -113,16 +129,82 @@ public static class CustomerProductPriceEndpoints
             return Results.ValidationProblem(errors);
         }
 
+        var customer = await LoadCustomerIdentity(dbContext, request.CustomerId, cancellationToken);
+        if (customer is null)
+        {
+            return Results.NotFound(new { message = "得意先が見つかりません。" });
+        }
+
+        var product = await LoadProductIdentity(dbContext, request.ProductId, cancellationToken);
+        if (product is null)
+        {
+            return Results.NotFound(new { message = "商品が見つかりません。" });
+        }
+
+        var combinationExists = await dbContext.CustomerProductPrices.AnyAsync(
+            price => price.CustomerId == request.CustomerId && price.ProductId == request.ProductId,
+            cancellationToken);
+
+        if (combinationExists)
+        {
+            return Results.Conflict(new { message = "同じ得意先と商品の組み合わせの単価情報は既に登録されています。" });
+        }
+
         return await CreatePriceRecord(
             dbContext,
             request.CustomerId,
             request.ProductId,
             request.UnitPrice,
-            request.ValidFrom,
+            request.EffectiveFrom,
             cancellationToken);
     }
 
-    private static async Task<IResult> GetCustomerProductPriceHistory(
+    private static async Task<IResult> GetCustomerProductPrice(
+        AppDbContext dbContext,
+        IBusinessClock businessClock,
+        long customerId,
+        long productId,
+        DateTime? asOf,
+        CancellationToken cancellationToken)
+    {
+        var errors = CustomerProductPriceValidation.ValidateListFilters(customerId, productId);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(errors);
+        }
+
+        var customer = await LoadCustomerIdentity(dbContext, customerId, cancellationToken);
+        if (customer is null)
+        {
+            return Results.NotFound(new { message = "得意先が見つかりません。" });
+        }
+
+        var product = await LoadProductIdentity(dbContext, productId, cancellationToken);
+        if (product is null)
+        {
+            return Results.NotFound(new { message = "商品が見つかりません。" });
+        }
+
+        var date = (asOf ?? businessClock.Today).Date;
+        var price = await dbContext.CustomerProductPrices
+            .AsNoTracking()
+            .Where(item => item.CustomerId == customerId
+                && item.ProductId == productId
+                && item.ValidFrom <= date)
+            .OrderByDescending(item => item.ValidFrom)
+            .ThenByDescending(item => item.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (price is null)
+        {
+            return Results.NotFound(new { message = "指定日時点で利用できる単価情報がありません。" });
+        }
+
+        var response = await BuildSummaryResponse(dbContext, price.Id, cancellationToken);
+        return Results.Ok(response);
+    }
+
+    private static async Task<IResult> GetCustomerProductPriceChanges(
         AppDbContext dbContext,
         long customerId,
         long productId,
@@ -146,45 +228,28 @@ public static class CustomerProductPriceEndpoints
             return Results.NotFound(new { message = "商品が見つかりません。" });
         }
 
-        var prices = await dbContext.CustomerProductPrices
+        var changes = await dbContext.CustomerProductPrices
             .AsNoTracking()
             .Where(price => price.CustomerId == customerId && price.ProductId == productId)
             .OrderByDescending(price => price.ValidFrom)
             .ThenByDescending(price => price.Id)
-            .Select(price => new CustomerProductPriceResponse(
-                price.Id,
-                price.CustomerId,
-                customer.CustomerCode,
-                dbContext.CustomerVersions
-                    .Where(version => version.CustomerId == price.CustomerId && version.ValidFrom <= price.ValidFrom)
-                    .OrderByDescending(version => version.ValidFrom)
-                    .ThenByDescending(version => version.Id)
-                    .Select(version => version.Name)
-                    .FirstOrDefault() ?? string.Empty,
-                price.ProductId,
-                product.ProductCode,
-                dbContext.ProductVersions
-                    .Where(version => version.ProductId == price.ProductId && version.ValidFrom <= price.ValidFrom)
-                    .OrderByDescending(version => version.ValidFrom)
-                    .ThenByDescending(version => version.Id)
-                    .Select(version => version.Name)
-                    .FirstOrDefault() ?? string.Empty,
+            .Select(price => new CustomerProductPriceChange(
                 price.UnitPrice,
                 price.ValidFrom,
                 price.CreatedAt))
             .ToListAsync(cancellationToken);
 
-        return Results.Ok(prices);
+        return Results.Ok(changes);
     }
 
-    private static async Task<IResult> CreateCustomerProductPriceHistory(
+    private static async Task<IResult> ChangeCustomerProductPrice(
         AppDbContext dbContext,
         long customerId,
         long productId,
-        CreateCustomerProductPriceHistoryRequest request,
+        ChangeCustomerProductPriceRequest request,
         CancellationToken cancellationToken)
     {
-        var errors = CustomerProductPriceValidation.ValidateCreateCustomerProductPriceHistory(
+        var errors = CustomerProductPriceValidation.ValidateChangeCustomerProductPrice(
             customerId,
             productId,
             request);
@@ -193,29 +258,64 @@ public static class CustomerProductPriceEndpoints
             return Results.ValidationProblem(errors);
         }
 
+        var customer = await LoadCustomerIdentity(dbContext, customerId, cancellationToken);
+        if (customer is null)
+        {
+            return Results.NotFound(new { message = "得意先が見つかりません。" });
+        }
+
+        var product = await LoadProductIdentity(dbContext, productId, cancellationToken);
+        if (product is null)
+        {
+            return Results.NotFound(new { message = "商品が見つかりません。" });
+        }
+
+        var combinationExists = await dbContext.CustomerProductPrices.AnyAsync(
+            price => price.CustomerId == customerId && price.ProductId == productId,
+            cancellationToken);
+
+        if (!combinationExists)
+        {
+            return Results.NotFound(new { message = "単価設定が見つかりません。" });
+        }
+
+        var effectiveFrom = request.EffectiveFrom.Date;
+        var priceExists = await dbContext.CustomerProductPrices.AnyAsync(
+            price => price.CustomerId == customerId
+                && price.ProductId == productId
+                && price.ValidFrom == effectiveFrom,
+            cancellationToken);
+
+        if (priceExists)
+        {
+            return Results.Conflict(new { message = "同じ適用開始日の単価情報は既に登録されています。" });
+        }
+
         return await CreatePriceRecord(
             dbContext,
             customerId,
             productId,
             request.UnitPrice,
-            request.ValidFrom,
-            cancellationToken);
+            request.EffectiveFrom,
+            cancellationToken,
+            returnOk: true);
     }
 
     private static async Task<IResult> PreviewCustomerProductPrice(
         AppDbContext dbContext,
+        IBusinessClock businessClock,
         long customerId,
         long productId,
-        DateTime targetDate,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
-        var errors = CustomerProductPriceValidation.ValidatePreview(customerId, productId, targetDate);
+        var errors = CustomerProductPriceValidation.ValidatePreview(customerId, productId, asOf);
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
         }
 
-        var date = targetDate.Date;
+        var date = (asOf ?? businessClock.Today).Date;
         var customer = await LoadCustomerIdentity(dbContext, customerId, cancellationToken);
         if (customer is null)
         {
@@ -237,7 +337,7 @@ public static class CustomerProductPriceEndpoints
 
         if (customerVersion is null)
         {
-            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
+            return Results.NotFound(new { message = "指定日時点で利用できる得意先情報がありません。" });
         }
 
         var productVersion = await dbContext.ProductVersions
@@ -249,7 +349,7 @@ public static class CustomerProductPriceEndpoints
 
         if (productVersion is null)
         {
-            return Results.NotFound(new { message = "対象日に適用できる商品履歴がありません。" });
+            return Results.NotFound(new { message = "指定日時点で利用できる商品情報がありません。" });
         }
 
         var customerProductPrice = await dbContext.CustomerProductPrices
@@ -262,24 +362,21 @@ public static class CustomerProductPriceEndpoints
             .FirstOrDefaultAsync(cancellationToken);
 
         var unitPrice = customerProductPrice?.UnitPrice ?? productVersion.StandardUnitPrice;
-        var unitPriceSource = customerProductPrice is null ? "ProductStandard" : "CustomerProductPrice";
+        var unitPriceSource = customerProductPrice is null
+            ? UnitPriceSources.ProductStandard
+            : UnitPriceSources.CustomerProductPrice;
 
         return Results.Ok(new CustomerProductPricePreviewResponse(
             customer.Id,
             customer.CustomerCode,
-            customerVersion.Id,
             customerVersion.Name,
             product.Id,
             product.ProductCode,
-            productVersion.Id,
             productVersion.Name,
             productVersion.Unit,
             unitPrice,
             unitPriceSource,
-            customerProductPrice?.Id,
-            customerProductPrice?.ValidFrom,
             productVersion.StandardUnitPrice,
-            productVersion.ValidFrom,
             date));
     }
 
@@ -288,31 +385,11 @@ public static class CustomerProductPriceEndpoints
         long customerId,
         long productId,
         decimal unitPrice,
-        DateTime validFrom,
-        CancellationToken cancellationToken)
+        DateTime effectiveFrom,
+        CancellationToken cancellationToken,
+        bool returnOk = false)
     {
-        var customer = await LoadCustomerIdentity(dbContext, customerId, cancellationToken);
-        if (customer is null)
-        {
-            return Results.NotFound(new { message = "得意先が見つかりません。" });
-        }
-
-        var product = await LoadProductIdentity(dbContext, productId, cancellationToken);
-        if (product is null)
-        {
-            return Results.NotFound(new { message = "商品が見つかりません。" });
-        }
-
-        var date = validFrom.Date;
-        var priceExists = await dbContext.CustomerProductPrices.AnyAsync(
-            price => price.CustomerId == customerId && price.ProductId == productId && price.ValidFrom == date,
-            cancellationToken);
-
-        if (priceExists)
-        {
-            return Results.Conflict(new { message = "同じ得意先、商品、適用開始日の得意先別商品単価が既に存在します。" });
-        }
-
+        var date = effectiveFrom.Date;
         var price = new CustomerProductPrice
         {
             CustomerId = customerId,
@@ -333,11 +410,21 @@ public static class CustomerProductPriceEndpoints
             return Results.Conflict(new { message = "得意先別商品単価の一意制約または外部キー制約に違反しました。" });
         }
 
-        var response = await BuildPriceResponse(dbContext, price.Id, cancellationToken);
-        return Results.Created($"/api/customer-product-prices/{price.Id}", response);
+        var response = await BuildSummaryResponse(dbContext, price.Id, cancellationToken);
+        if (response is null)
+        {
+            return Results.Conflict(new { message = "得意先別商品単価の一意制約または外部キー制約に違反しました。" });
+        }
+
+        if (returnOk)
+        {
+            return Results.Ok(response);
+        }
+
+        return Results.Created($"/api/customer-product-prices/{customerId}/{productId}", response);
     }
 
-    private static async Task<CustomerProductPriceResponse?> BuildPriceResponse(
+    private static async Task<CustomerProductPriceSummary?> BuildSummaryResponse(
         AppDbContext dbContext,
         long priceId,
         CancellationToken cancellationToken)
@@ -345,8 +432,7 @@ public static class CustomerProductPriceEndpoints
         return await dbContext.CustomerProductPrices
             .AsNoTracking()
             .Where(price => price.Id == priceId)
-            .Select(price => new CustomerProductPriceResponse(
-                price.Id,
+            .Select(price => new CustomerProductPriceSummary(
                 price.CustomerId,
                 price.Customer.CustomerCode,
                 dbContext.CustomerVersions

@@ -25,66 +25,60 @@ internal static class TaxCategories
 
 internal static class TaxRateValidation
 {
-    public static Dictionary<string, string[]> ValidateCreateTaxRate(CreateTaxRateRequest request)
+    public static Dictionary<string, string[]> ValidateChangeTaxRate(
+        string taxCategory,
+        ChangeTaxRateRequest request)
     {
         var errors = new Dictionary<string, string[]>();
 
-        AddRequiredString(errors, nameof(request.TaxCategory), request.TaxCategory, 30);
-
         TaxCategoryDefinition? taxCategoryDefinition = null;
-        if (!string.IsNullOrWhiteSpace(request.TaxCategory) && request.TaxCategory.Length <= 30)
+        if (string.IsNullOrWhiteSpace(taxCategory))
         {
-            var taxCategory = request.TaxCategory.Trim();
-            if (!TaxCategories.TryGet(taxCategory, out taxCategoryDefinition))
-            {
-                errors[nameof(request.TaxCategory)] = ["未知の税区分です。"];
-            }
+            errors["taxCategory"] = ["税区分は必須です。"];
+        }
+        else if (taxCategory.Length > 30)
+        {
+            errors["taxCategory"] = ["30文字以内で指定してください。"];
+        }
+        else if (!TaxCategories.TryGet(taxCategory.Trim(), out taxCategoryDefinition))
+        {
+            errors["taxCategory"] = ["未知の税区分です。"];
         }
 
-        if (request.Rate < 0)
-        {
-            errors[nameof(request.Rate)] = ["税率は0以上で指定してください。"];
-        }
-        else if (request.Rate > 9.9999m)
-        {
-            errors[nameof(request.Rate)] = ["税率は9.9999以下で指定してください。"];
-        }
-        else if (decimal.Round(request.Rate, 4) != request.Rate)
-        {
-            errors[nameof(request.Rate)] = ["税率は小数4桁までで指定してください。"];
-        }
-        else if (taxCategoryDefinition is { RequiresZeroRate: true } && request.Rate != 0.0000m)
-        {
-            errors[nameof(request.Rate)] = ["非課税・免税の税率は0.0000で指定してください。"];
-        }
-        else if (taxCategoryDefinition is { RequiresZeroRate: false } && request.Rate <= 0)
-        {
-            errors[nameof(request.Rate)] = ["課税対象の税率は0より大きい値で指定してください。"];
-        }
+        ValidateRate(errors, request.Rate, taxCategoryDefinition);
 
-        if (request.ValidFrom == default)
+        if (request.EffectiveFrom == default)
         {
-            errors[nameof(request.ValidFrom)] = ["適用開始日は必須です。"];
+            errors[nameof(ChangeTaxRateRequest.EffectiveFrom)] = ["適用開始日は必須です。"];
         }
 
         return errors;
     }
 
-    private static void AddRequiredString(
+    private static void ValidateRate(
         Dictionary<string, string[]> errors,
-        string fieldName,
-        string? value,
-        int maxLength)
+        decimal rate,
+        TaxCategoryDefinition? taxCategoryDefinition)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (rate < 0)
         {
-            errors[fieldName] = ["必須です。"];
-            return;
+            errors[nameof(ChangeTaxRateRequest.Rate)] = ["税率は0以上で指定してください。"];
         }
-
-        if (value.Length > maxLength)
+        else if (rate > 9.9999m)
         {
-            errors[fieldName] = [$"{maxLength}文字以内で指定してください。"];
+            errors[nameof(ChangeTaxRateRequest.Rate)] = ["税率は9.9999以下で指定してください。"];
+        }
+        else if (decimal.Round(rate, 4) != rate)
+        {
+            errors[nameof(ChangeTaxRateRequest.Rate)] = ["税率は小数4桁までで指定してください。"];
+        }
+        else if (taxCategoryDefinition is { RequiresZeroRate: true } && rate != 0.0000m)
+        {
+            errors[nameof(ChangeTaxRateRequest.Rate)] = ["非課税・免税の税率は0.0000で指定してください。"];
+        }
+        else if (taxCategoryDefinition is { RequiresZeroRate: false } && rate <= 0)
+        {
+            errors[nameof(ChangeTaxRateRequest.Rate)] = ["課税対象の税率は0より大きい値で指定してください。"];
         }
     }
 }

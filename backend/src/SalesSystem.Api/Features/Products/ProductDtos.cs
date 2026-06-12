@@ -1,37 +1,22 @@
 namespace SalesSystem.Api.Features.Products;
 
-public sealed record ProductListItemResponse(
+public sealed record ProductSummary(
     long ProductId,
     string ProductCode,
-    long ProductVersionId,
     string Name,
     string Unit,
     decimal StandardUnitPrice,
     string TaxCategory,
     bool IsDiscontinued,
-    DateTime ValidFrom);
+    DateTime EffectiveFrom);
 
-public sealed record ProductResponse(
-    long ProductId,
-    string ProductCode,
-    long ProductVersionId,
+public sealed record ProductChange(
+    DateTime EffectiveFrom,
     string Name,
     string Unit,
     decimal StandardUnitPrice,
     string TaxCategory,
-    bool IsDiscontinued,
-    DateTime ValidFrom);
-
-public sealed record ProductVersionResponse(
-    long ProductVersionId,
-    long ProductId,
-    string ProductCode,
-    string Name,
-    string Unit,
-    decimal StandardUnitPrice,
-    string TaxCategory,
-    bool IsDiscontinued,
-    DateTime ValidFrom);
+    bool IsDiscontinued);
 
 public sealed record CreateProductRequest(
     string? ProductCode,
@@ -40,12 +25,12 @@ public sealed record CreateProductRequest(
     decimal StandardUnitPrice,
     string? TaxCategory,
     bool IsDiscontinued,
-    DateTime ValidFrom);
+    DateTime EffectiveFrom);
 
-public sealed record CreateProductVersionRequest(
+public sealed record ChangeProductRequest(
     string? Name,
     string? Unit,
     decimal StandardUnitPrice,
     string? TaxCategory,
     bool IsDiscontinued,
-    DateTime ValidFrom);
+    DateTime EffectiveFrom);

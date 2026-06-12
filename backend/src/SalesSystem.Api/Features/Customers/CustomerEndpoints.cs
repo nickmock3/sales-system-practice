@@ -18,14 +18,14 @@ public static class CustomerEndpoints
         group.MapPost("/", CreateCustomer)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
 
-        group.MapGet("/{customerId:long}/versions", GetCustomerVersions)
+        group.MapGet("/{customerId:long}", GetCustomer)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
-        group.MapPost("/{customerId:long}/versions", CreateCustomerVersion)
+        group.MapGet("/{customerId:long}/changes", GetCustomerChanges)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
+        group.MapPost("/{customerId:long}/changes", ChangeCustomer)
             .RequireAuthorization(AuthorizationPolicies.MasterMaintainer);
-
-        group.MapGet("/{customerId:long}/preview", PreviewCustomer)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
         return endpoints;
     }
@@ -70,10 +70,9 @@ public static class CustomerEndpoints
 
         var customers = await query
             .OrderBy(item => item.customer.CustomerCode)
-            .Select(item => new CustomerListItemResponse(
+            .Select(item => new CustomerSummary(
                 item.customer.Id,
                 item.customer.CustomerCode,
-                item.version.Id,
                 item.version.Name,
                 item.version.Address,
                 item.version.PhoneNumber,
@@ -95,7 +94,7 @@ public static class CustomerEndpoints
         }
 
         var customerCode = request.CustomerCode!.Trim();
-        var validFrom = request.ValidFrom.Date;
+        var effectiveFrom = request.EffectiveFrom.Date;
 
         var codeExists = await dbContext.Customers
             .AnyAsync(customer => customer.CustomerCode == customerCode, cancellationToken);
@@ -116,7 +115,7 @@ public static class CustomerEndpoints
             Name = request.Name!.Trim(),
             Address = request.Address!.Trim(),
             PhoneNumber = request.PhoneNumber!.Trim(),
-            ValidFrom = validFrom
+            ValidFrom = effectiveFrom
         });
 
         dbContext.Customers.Add(customer);
@@ -131,12 +130,14 @@ public static class CustomerEndpoints
         }
 
         var version = customer.Versions[0];
-        return Results.Created($"/api/customers/{customer.Id}", ToCustomerResponse(customer, version));
+        return Results.Created($"/api/customers/{customer.Id}", ToSummary(customer, version));
     }
 
-    private static async Task<IResult> GetCustomerVersions(
+    private static async Task<IResult> GetCustomer(
         AppDbContext dbContext,
+        IBusinessClock businessClock,
         long customerId,
+        DateTime? asOf,
         CancellationToken cancellationToken)
     {
         var customer = await dbContext.Customers
@@ -150,52 +151,82 @@ public static class CustomerEndpoints
             return Results.NotFound(new { message = "得意先が見つかりません。" });
         }
 
-        var versions = await dbContext.CustomerVersions
+        var date = (asOf ?? businessClock.Today).Date;
+        var version = await dbContext.CustomerVersions
+            .AsNoTracking()
+            .Where(version => version.CustomerId == customerId && version.ValidFrom <= date)
+            .OrderByDescending(version => version.ValidFrom)
+            .ThenByDescending(version => version.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (version is null)
+        {
+            return Results.NotFound(new { message = "指定日時点で利用できる得意先情報がありません。" });
+        }
+
+        return Results.Ok(ToSummary(customer, version));
+    }
+
+    private static async Task<IResult> GetCustomerChanges(
+        AppDbContext dbContext,
+        long customerId,
+        CancellationToken cancellationToken)
+    {
+        var customerExists = await dbContext.Customers
+            .AsNoTracking()
+            .AnyAsync(customer => customer.Id == customerId, cancellationToken);
+
+        if (!customerExists)
+        {
+            return Results.NotFound(new { message = "得意先が見つかりません。" });
+        }
+
+        var changes = await dbContext.CustomerVersions
             .AsNoTracking()
             .Where(version => version.CustomerId == customerId)
             .OrderByDescending(version => version.ValidFrom)
             .ThenByDescending(version => version.Id)
-            .Select(version => new CustomerVersionResponse(
-                version.Id,
-                version.CustomerId,
-                customer.CustomerCode,
+            .Select(version => new CustomerChange(
+                version.ValidFrom,
                 version.Name,
                 version.Address,
-                version.PhoneNumber,
-                version.ValidFrom))
+                version.PhoneNumber))
             .ToListAsync(cancellationToken);
 
-        return Results.Ok(versions);
+        return Results.Ok(changes);
     }
 
-    private static async Task<IResult> CreateCustomerVersion(
+    private static async Task<IResult> ChangeCustomer(
         AppDbContext dbContext,
         long customerId,
-        CreateCustomerVersionRequest request,
+        ChangeCustomerRequest request,
         CancellationToken cancellationToken)
     {
-        var errors = CustomerValidation.ValidateCreateCustomerVersion(request);
+        var errors = CustomerValidation.ValidateChangeCustomer(request);
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
         }
 
         var customer = await dbContext.Customers
-            .FirstOrDefaultAsync(customer => customer.Id == customerId, cancellationToken);
+            .AsNoTracking()
+            .Where(customer => customer.Id == customerId)
+            .Select(customer => new CustomerIdentity(customer.Id, customer.CustomerCode))
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (customer is null)
         {
             return Results.NotFound(new { message = "得意先が見つかりません。" });
         }
 
-        var validFrom = request.ValidFrom.Date;
+        var effectiveFrom = request.EffectiveFrom.Date;
         var versionExists = await dbContext.CustomerVersions.AnyAsync(
-            version => version.CustomerId == customerId && version.ValidFrom == validFrom,
+            version => version.CustomerId == customerId && version.ValidFrom == effectiveFrom,
             cancellationToken);
 
         if (versionExists)
         {
-            return Results.Conflict(new { message = "同じ適用開始日の得意先履歴が既に存在します。" });
+            return Results.Conflict(new { message = "同じ適用開始日の得意先情報は既に登録されています。" });
         }
 
         var version = new CustomerVersion
@@ -204,7 +235,7 @@ public static class CustomerEndpoints
             Name = request.Name!.Trim(),
             Address = request.Address!.Trim(),
             PhoneNumber = request.PhoneNumber!.Trim(),
-            ValidFrom = validFrom
+            ValidFrom = effectiveFrom
         };
 
         dbContext.CustomerVersions.Add(version);
@@ -218,66 +249,12 @@ public static class CustomerEndpoints
             return Results.Conflict(new { message = "得意先履歴の一意制約に違反しました。" });
         }
 
-        return Results.Created($"/api/customers/{customerId}/versions/{version.Id}", ToCustomerVersionResponse(customer, version));
+        return Results.Ok(ToSummary(customer, version));
     }
 
-    private static async Task<IResult> PreviewCustomer(
-        AppDbContext dbContext,
-        long customerId,
-        DateTime targetDate,
-        CancellationToken cancellationToken)
+    private static CustomerSummary ToSummary(Customer customer, CustomerVersion version)
     {
-        if (targetDate == default)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                [nameof(targetDate)] = ["対象日は必須です。"]
-            });
-        }
-
-        var customer = await dbContext.Customers
-            .AsNoTracking()
-            .Where(customer => customer.Id == customerId)
-            .Select(customer => new CustomerIdentity(customer.Id, customer.CustomerCode))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (customer is null)
-        {
-            return Results.NotFound(new { message = "得意先が見つかりません。" });
-        }
-
-        var date = targetDate.Date;
-        var version = await dbContext.CustomerVersions
-            .AsNoTracking()
-            .Where(version => version.CustomerId == customerId && version.ValidFrom <= date)
-            .OrderByDescending(version => version.ValidFrom)
-            .ThenByDescending(version => version.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (version is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
-        }
-
-        return Results.Ok(ToCustomerVersionResponse(customer, version));
-    }
-
-    private static CustomerResponse ToCustomerResponse(Customer customer, CustomerVersion version)
-    {
-        return new CustomerResponse(
-            customer.Id,
-            customer.CustomerCode,
-            version.Id,
-            version.Name,
-            version.Address,
-            version.PhoneNumber,
-            version.ValidFrom);
-    }
-
-    private static CustomerVersionResponse ToCustomerVersionResponse(Customer customer, CustomerVersion version)
-    {
-        return new CustomerVersionResponse(
-            version.Id,
+        return new CustomerSummary(
             customer.Id,
             customer.CustomerCode,
             version.Name,
@@ -286,12 +263,9 @@ public static class CustomerEndpoints
             version.ValidFrom);
     }
 
-    private static CustomerVersionResponse ToCustomerVersionResponse(
-        CustomerIdentity customer,
-        CustomerVersion version)
+    private static CustomerSummary ToSummary(CustomerIdentity customer, CustomerVersion version)
     {
-        return new CustomerVersionResponse(
-            version.Id,
+        return new CustomerSummary(
             customer.Id,
             customer.CustomerCode,
             version.Name,

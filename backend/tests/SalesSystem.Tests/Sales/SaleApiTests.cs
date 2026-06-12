@@ -444,7 +444,7 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-04-01");
 
         using var customerResponse = await client.GetAsync($"/api/sales/preview-customer?customerId={customerId}&salesDate=2026-04-15");
-        var customer = await customerResponse.Content.ReadFromJsonAsync<CustomerVersionResponse>();
+        var customer = await customerResponse.Content.ReadFromJsonAsync<CustomerSummary>();
 
         using var productResponse = await client.GetAsync($"/api/sales/preview-product?productId={productId}&salesDate=2026-04-15");
         var product = await productResponse.Content.ReadFromJsonAsync<SalesProductPreviewResponse>();
@@ -794,11 +794,11 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
             name,
             address = "東京都千代田区1-1-1",
             phoneNumber = "03-1234-5678",
-            validFrom
+            effectiveFrom = validFrom
         });
 
         response.EnsureSuccessStatusCode();
-        var created = await response.Content.ReadFromJsonAsync<CustomerResponse>();
+        var created = await response.Content.ReadFromJsonAsync<CustomerSummary>();
         return created!.CustomerId;
     }
 
@@ -808,12 +808,12 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         string name,
         string validFrom)
     {
-        using var response = await client.PostAsJsonAsync($"/api/customers/{customerId}/versions", new
+        using var response = await client.PostAsJsonAsync($"/api/customers/{customerId}/changes", new
         {
             name,
             address = "東京都中央区2-2-2",
             phoneNumber = "03-2345-6789",
-            validFrom
+            effectiveFrom = validFrom
         });
 
         response.EnsureSuccessStatusCode();
@@ -836,11 +836,11 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
             standardUnitPrice,
             taxCategory,
             isDiscontinued,
-            validFrom
+            effectiveFrom = validFrom
         });
 
         response.EnsureSuccessStatusCode();
-        var created = await response.Content.ReadFromJsonAsync<ProductResponse>();
+        var created = await response.Content.ReadFromJsonAsync<ProductSummary>();
         return created!.ProductId;
     }
 
@@ -853,14 +853,14 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         bool isDiscontinued,
         string validFrom)
     {
-        using var response = await client.PostAsJsonAsync($"/api/products/{productId}/versions", new
+        using var response = await client.PostAsJsonAsync($"/api/products/{productId}/changes", new
         {
             name,
             unit = "箱",
             standardUnitPrice,
             taxCategory,
             isDiscontinued,
-            validFrom
+            effectiveFrom = validFrom
         });
 
         response.EnsureSuccessStatusCode();
@@ -872,11 +872,10 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         decimal rate,
         string validFrom)
     {
-        using var response = await client.PostAsJsonAsync("/api/tax-rates", new
+        using var response = await client.PostAsJsonAsync($"/api/tax-rates/{taxCategory}/changes", new
         {
-            taxCategory,
             rate,
-            validFrom
+            effectiveFrom = validFrom
         });
 
         if (response.StatusCode != HttpStatusCode.Conflict)

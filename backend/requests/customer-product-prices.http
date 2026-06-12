@@ -1,0 +1,43 @@
+@baseUrl = http://localhost:5165
+@user = master1
+@roles = MasterMaintainer
+
+### 得意先別商品単価一覧（asOf 時点・組み合わせごと1件）
+GET {{baseUrl}}/api/customer-product-prices?asOf=2026-04-15
+X-Dummy-User: {{user}}
+
+### 初回単価登録（新しい得意先・商品の組み合わせ）
+POST {{baseUrl}}/api/customer-product-prices
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "customerId": 1,
+  "productId": 2,
+  "unitPrice": 95,
+  "effectiveFrom": "2026-03-01"
+}
+
+### 指定日時点の単価情報
+GET {{baseUrl}}/api/customer-product-prices/1/2?asOf=2026-04-15
+X-Dummy-User: {{user}}
+
+### 単価変更履歴一覧
+GET {{baseUrl}}/api/customer-product-prices/1/2/changes
+X-Dummy-User: {{user}}
+
+### 指定日からの単価変更
+POST {{baseUrl}}/api/customer-product-prices/1/2/changes
+Content-Type: application/json
+X-Dummy-User: {{user}}
+X-Dummy-Roles: {{roles}}
+
+{
+  "unitPrice": 90,
+  "effectiveFrom": "2026-06-01"
+}
+
+### 自動取得単価プレビュー
+GET {{baseUrl}}/api/customer-product-prices/preview?customerId=1&productId=2&asOf=2026-04-15
+X-Dummy-User: {{user}}

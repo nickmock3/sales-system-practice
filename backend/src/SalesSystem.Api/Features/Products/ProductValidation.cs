@@ -6,34 +6,34 @@ internal static class ProductValidation
 {
     public static Dictionary<string, string[]> ValidateCreateProduct(CreateProductRequest request)
     {
-        var errors = ValidateVersionFields(
+        var errors = ValidateChangeFields(
             request.Name,
             request.Unit,
             request.StandardUnitPrice,
             request.TaxCategory,
-            request.ValidFrom);
+            request.EffectiveFrom);
 
         AddRequiredString(errors, nameof(request.ProductCode), request.ProductCode, 30);
 
         return errors;
     }
 
-    public static Dictionary<string, string[]> ValidateCreateProductVersion(CreateProductVersionRequest request)
+    public static Dictionary<string, string[]> ValidateChangeProduct(ChangeProductRequest request)
     {
-        return ValidateVersionFields(
+        return ValidateChangeFields(
             request.Name,
             request.Unit,
             request.StandardUnitPrice,
             request.TaxCategory,
-            request.ValidFrom);
+            request.EffectiveFrom);
     }
 
-    private static Dictionary<string, string[]> ValidateVersionFields(
+    private static Dictionary<string, string[]> ValidateChangeFields(
         string? name,
         string? unit,
         decimal standardUnitPrice,
         string? taxCategory,
-        DateTime validFrom)
+        DateTime effectiveFrom)
     {
         var errors = new Dictionary<string, string[]>();
 
@@ -57,9 +57,9 @@ internal static class ProductValidation
             errors[nameof(CreateProductRequest.StandardUnitPrice)] = ["標準単価は小数2桁までで指定してください。"];
         }
 
-        if (validFrom == default)
+        if (effectiveFrom == default)
         {
-            errors[nameof(CreateProductRequest.ValidFrom)] = ["適用開始日は必須です。"];
+            errors[nameof(CreateProductRequest.EffectiveFrom)] = ["適用開始日は必須です。"];
         }
 
         return errors;
