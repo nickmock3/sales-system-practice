@@ -83,16 +83,34 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal(2, detail.Details.Count);
         Assert.Equal("商品A 最新", detail.Details[0].ProductName);
         Assert.Equal(100.01m, detail.Details[0].UnitPrice);
-        Assert.True(detail.Details[0].TaxRateId > 0);
+        Assert.Equal("PRODUCT_STANDARD", detail.Details[0].UnitPriceSource);
         Assert.Equal("STANDARD", detail.Details[0].TaxCategory);
         Assert.Equal("標準税率", detail.Details[0].TaxCategoryName);
         Assert.Equal("TAXABLE_STANDARD", detail.Details[0].AccountingCategory);
-        Assert.Null(detail.Details[0].CustomerProductPriceId);
         Assert.False(detail.Details[0].IsManualUnitPrice);
         Assert.Equal(100.01m, detail.Details[0].AutoUnitPrice);
         Assert.Equal(0.10m, detail.Details[0].TaxRate);
         Assert.Equal(10.00m, detail.Details[0].TaxAmount);
         Assert.Equal(100.51m, detail.Details[0].Amount);
+
+        var detailJson = await detailResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("customerVersionId", detailJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("productVersionId", detailJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("taxRateId", detailJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("customerProductPriceId", detailJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("saleStatusHistoryId", detailJson, StringComparison.OrdinalIgnoreCase);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var savedSale = await dbContext.Sales.AsNoTracking().SingleAsync(sale => sale.Id == created.SaleId);
+        var savedDetails = await dbContext.SaleDetails.AsNoTracking()
+            .Where(item => item.SaleId == created.SaleId)
+            .OrderBy(item => item.Id)
+            .ToListAsync();
+
+        Assert.True(savedSale.CustomerVersionId > 0);
+        Assert.All(savedDetails, item => Assert.True(item.ProductVersionId > 0));
+        Assert.All(savedDetails, item => Assert.True(item.TaxRateId > 0));
 
         using var listResponse = await client.GetAsync($"/api/sales?salesDateFrom=2026-04-01&salesDateTo=2026-04-30&customerId={customerId}&customerCode=CUST001");
         var list = await listResponse.Content.ReadFromJsonAsync<List<SaleListItemResponse>>();
@@ -104,6 +122,9 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal("最新得意先", item.CustomerName);
         Assert.Equal(238.16m, item.TotalAmount);
         Assert.Equal(nameof(SaleStatus.Active), item.Status);
+
+        var listJson = await listResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("customerVersionId", listJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -158,7 +179,7 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Equal("TAXABLE_OLD_STANDARD", oldStandardDetail.AccountingCategory);
         Assert.Equal(0.08m, oldStandardDetail.TaxRate);
         Assert.Equal(16.00m, oldStandardDetail.TaxAmount);
-        Assert.NotEqual(reducedDetail.TaxRateId, oldStandardDetail.TaxRateId);
+        Assert.NotEqual(reducedDetail.TaxCategory, oldStandardDetail.TaxCategory);
     }
 
     [Fact]
@@ -187,17 +208,15 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         });
         createResponse.EnsureSuccessStatusCode();
         var created = await createResponse.Content.ReadFromJsonAsync<SaleResponse>();
-        var registeredDetail = Assert.Single(created!.Details);
 
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-05-01");
 
-        using var detailResponse = await client.GetAsync($"/api/sales/{created.SaleId}");
+        using var detailResponse = await client.GetAsync($"/api/sales/{created!.SaleId}");
         var detail = await detailResponse.Content.ReadFromJsonAsync<SaleResponse>();
 
         Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
         Assert.NotNull(detail);
         var currentDetail = Assert.Single(detail.Details);
-        Assert.Equal(registeredDetail.TaxRateId, currentDetail.TaxRateId);
         Assert.Equal("STANDARD", currentDetail.TaxCategory);
         Assert.Equal("標準税率", currentDetail.TaxCategoryName);
         Assert.Equal("TAXABLE_STANDARD", currentDetail.AccountingCategory);
@@ -277,6 +296,64 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.Null(originalDetailResponse.OriginalSaleId);
         Assert.Equal(correction.CorrectionSaleId, originalDetailResponse.CorrectionSaleId);
         Assert.Equal("数量を誤って登録したため", originalDetailResponse.CorrectionReason);
+        Assert.Equal("商品P001", originalDetailResponse.Details[0].ProductName);
+        Assert.Equal("PRODUCT_STANDARD", originalDetailResponse.Details[0].UnitPriceSource);
+
+        using var cancellationDetailResponse = await client.GetAsync($"/api/sales/{correction.CorrectionSaleId}");
+        var cancellationDetailResponseBody = await cancellationDetailResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, cancellationDetailResponse.StatusCode);
+        Assert.NotNull(cancellationDetailResponseBody);
+        Assert.Equal(originalDetailResponse.CustomerName, cancellationDetailResponseBody.CustomerName);
+        var cancellationLine = Assert.Single(cancellationDetailResponseBody.Details);
+        Assert.Equal(originalDetailResponse.Details[0].ProductName, cancellationLine.ProductName);
+        Assert.Equal(originalDetailResponse.Details[0].Unit, cancellationLine.Unit);
+        Assert.Equal(originalDetailResponse.Details[0].UnitPrice, cancellationLine.UnitPrice);
+        Assert.Equal(originalDetailResponse.Details[0].UnitPriceSource, cancellationLine.UnitPriceSource);
+        Assert.Equal(originalDetailResponse.Details[0].TaxCategory, cancellationLine.TaxCategory);
+        Assert.Equal(originalDetailResponse.Details[0].TaxRate, cancellationLine.TaxRate);
+    }
+
+    [Fact]
+    public async Task GetSale_AfterMasterChange_ReturnsRegisteredSnapshot()
+    {
+        // マスタ変更後も売上詳細が登録時点の得意先名と商品名を返すことを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "旧得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A 旧", 100.00m, "STANDARD", false, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var createResponse = await client.PostAsJsonAsync("/api/sales", new
+        {
+            salesDate = "2026-04-15",
+            customerId,
+            lines = new[]
+            {
+                new
+                {
+                    productId,
+                    quantity = 1m,
+                    unitPrice = 100.00m
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        await CreateCustomerVersionAsync(client, customerId, "変更後得意先", "2026-05-01");
+        await CreateProductVersionAsync(client, productId, "商品A 変更後", 200.00m, "STANDARD", false, "2026-05-01");
+
+        using var detailResponse = await client.GetAsync($"/api/sales/{created!.SaleId}");
+        var detail = await detailResponse.Content.ReadFromJsonAsync<SaleResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        Assert.NotNull(detail);
+        Assert.Equal("旧得意先", detail.CustomerName);
+        var line = Assert.Single(detail.Details);
+        Assert.Equal("商品A 旧", line.ProductName);
+        Assert.Equal(100.00m, line.UnitPrice);
+        Assert.Equal("PRODUCT_STANDARD", line.UnitPriceSource);
     }
 
     [Fact]
@@ -430,9 +507,9 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
     }
 
     [Fact]
-    public async Task PreviewCustomerAndProduct_ReturnLatestHistoriesBeforeSalesDate()
+    public async Task LinePreview_ReturnsLatestProductAndTaxInfo()
     {
-        // 売上日を指定したプレビューで最新の得意先履歴と商品履歴・税率が返ることを確認する。
+        // 売上日を指定した明細入力補助 API で最新の商品情報と税率が返ることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "旧得意先", "2026-01-01");
@@ -443,88 +520,97 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         await CreateTaxRateAsync(client, "STANDARD", 0.08m, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-04-01");
 
-        using var customerResponse = await client.GetAsync($"/api/sales/preview-customer?customerId={customerId}&salesDate=2026-04-15");
+        using var customerResponse = await client.GetAsync($"/api/customers/{customerId}?asOf=2026-04-15");
         var customer = await customerResponse.Content.ReadFromJsonAsync<CustomerSummary>();
 
-        using var productResponse = await client.GetAsync($"/api/sales/preview-product?productId={productId}&salesDate=2026-04-15");
-        var product = await productResponse.Content.ReadFromJsonAsync<SalesProductPreviewResponse>();
+        using var linePreviewResponse = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
+        var preview = await linePreviewResponse.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
+        var previewJson = await linePreviewResponse.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, customerResponse.StatusCode);
         Assert.NotNull(customer);
         Assert.Equal("最新得意先", customer.Name);
 
-        Assert.Equal(HttpStatusCode.OK, productResponse.StatusCode);
-        Assert.NotNull(product);
-        Assert.Equal("商品A 最新", product.Name);
-        Assert.Equal(100.01m, product.StandardUnitPrice);
-        Assert.Equal(0.10m, product.TaxRate);
-        Assert.False(product.IsDiscontinued);
+        Assert.Equal(HttpStatusCode.OK, linePreviewResponse.StatusCode);
+        Assert.NotNull(preview);
+        Assert.Equal("商品A 最新", preview.ProductName);
+        Assert.Equal(100.01m, preview.AutoUnitPrice);
+        Assert.Equal("PRODUCT_STANDARD", preview.UnitPriceSource);
+        Assert.Equal(0.10m, preview.TaxRate);
+        Assert.Equal("TAXABLE_STANDARD", preview.AccountingCategory);
+        Assert.False(preview.IsDiscontinued);
+        Assert.DoesNotContain("productVersionId", previewJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("taxRateId", previewJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("customerProductPriceId", previewJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("effectiveFrom", previewJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task PreviewSalesLine_WithCustomerProductPrice_ReturnsCustomerPriceAndTaxSnapshot()
+    public async Task LinePreview_WithCustomerProductPrice_ReturnsCustomerPriceAndTaxSnapshot()
     {
-        // 得意先別商品単価がある場合、売上入力補助 API がその単価と税区分情報を返すことを確認する。
+        // 得意先別商品単価がある場合、明細入力補助 API がその単価と税区分情報を返すことを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
         var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
-        var customerProductPriceId = await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
+        await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
 
-        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        using var response = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
         var preview = await response.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(preview);
         Assert.Equal(productId, preview.ProductId);
         Assert.Equal("P001", preview.ProductCode);
-        Assert.Equal("商品A", preview.Name);
+        Assert.Equal("商品A", preview.ProductName);
         Assert.Equal("箱", preview.Unit);
         Assert.Equal(80.00m, preview.AutoUnitPrice);
-        Assert.Equal(customerProductPriceId, preview.CustomerProductPriceId);
+        Assert.Equal("CUSTOMER_PRODUCT_PRICE", preview.UnitPriceSource);
         Assert.Equal("STANDARD", preview.TaxCategory);
         Assert.Equal("標準税率", preview.TaxCategoryName);
         Assert.Equal(0.10m, preview.TaxRate);
-        Assert.True(preview.TaxRateId > 0);
         Assert.False(preview.IsDiscontinued);
-        Assert.Equal(new DateTime(2026, 1, 1), preview.ProductVersionValidFrom);
     }
 
     [Fact]
-    public async Task PreviewSalesLine_WithoutCustomerProductPrice_ReturnsStandardUnitPrice()
+    public async Task LinePreview_WithoutCustomerProductPrice_ReturnsStandardUnitPrice()
     {
-        // 得意先別商品単価がない場合、売上入力補助 API が商品標準単価へフォールバックすることを確認する。
+        // 得意先別商品単価がない場合、明細入力補助 API が商品標準単価へフォールバックすることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
         var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 120.00m, "STANDARD", false, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
 
-        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        using var response = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
         var preview = await response.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(preview);
         Assert.Equal(120.00m, preview.AutoUnitPrice);
-        Assert.Null(preview.CustomerProductPriceId);
+        Assert.Equal("PRODUCT_STANDARD", preview.UnitPriceSource);
         Assert.Equal("STANDARD", preview.TaxCategory);
         Assert.Equal("標準税率", preview.TaxCategoryName);
         Assert.Equal(0.10m, preview.TaxRate);
     }
 
     [Fact]
-    public async Task CreateSale_UsesSameAutoUnitPriceAsPreviewSalesLine()
+    public async Task CreateSale_UsesSameAutoUnitPriceAsLinePreview()
     {
-        // 売上登録 API と売上入力補助 API で同じ自動取得単価と税区分が使われることを確認する。
+        // 売上登録 API と明細入力補助 API で同じ自動取得単価と税区分が使われることを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
         var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
-        var customerProductPriceId = await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
+        await CreateCustomerProductPriceAsync(customerId, productId, 80.00m, "2026-04-01");
 
-        using var previewResponse = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        using var previewResponse = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
         var preview = await previewResponse.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
 
         using var createResponse = await client.PostAsJsonAsync("/api/sales", new
@@ -549,12 +635,16 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         var detail = Assert.Single(created.Details);
         Assert.Equal(preview!.AutoUnitPrice, detail.UnitPrice);
         Assert.Equal(preview.AutoUnitPrice, detail.AutoUnitPrice);
-        Assert.Equal(customerProductPriceId, detail.CustomerProductPriceId);
+        Assert.Equal("CUSTOMER_PRODUCT_PRICE", detail.UnitPriceSource);
         Assert.False(detail.IsManualUnitPrice);
         Assert.Equal(preview.TaxCategory, detail.TaxCategory);
         Assert.Equal(preview.TaxCategoryName, detail.TaxCategoryName);
-        Assert.Equal(preview.TaxRateId, detail.TaxRateId);
         Assert.Equal(176.00m, created.TotalAmount);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var savedDetail = await dbContext.SaleDetails.AsNoTracking().SingleAsync(item => item.SaleId == created.SaleId);
+        Assert.NotNull(savedDetail.CustomerProductPriceId);
     }
 
     [Fact]
@@ -619,6 +709,7 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
         Assert.True(detail.IsManualUnitPrice);
         Assert.Equal(100.00m, detail.AutoUnitPrice);
         Assert.Equal(90.00m, detail.UnitPrice);
+        Assert.Equal("PRODUCT_STANDARD", detail.UnitPriceSource);
         Assert.Equal("キャンペーン値引き", detail.ManualUnitPriceReason);
     }
 
@@ -652,18 +743,38 @@ public sealed class SaleApiTests : IClassFixture<SalesSystemWebApplicationFactor
     }
 
     [Fact]
-    public async Task PreviewSalesLine_WithoutApplicableCustomerHistory_ReturnsNotFound()
+    public async Task LinePreview_WithoutApplicableCustomerHistory_ReturnsNotFound()
     {
-        // 対象日に得意先履歴が存在しない場合、売上入力補助 API がエラーを返すことを確認する。
+        // 対象日に得意先履歴が存在しない場合、明細入力補助 API がエラーを返すことを確認する。
         await ResetDatabaseAsync();
         using var client = CreateMasterMaintainerClient();
         var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-05-01");
         var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", false, "2026-01-01");
         await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
 
-        using var response = await client.GetAsync($"/api/sales/preview-sales-line?customerId={customerId}&productId={productId}&salesDate=2026-04-15");
+        using var response = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task LinePreview_WithDiscontinuedProduct_ReturnsDiscontinuedFlag()
+    {
+        // 販売停止中の商品は明細入力補助 API で販売停止フラグ付きの情報として返ることを確認する。
+        await ResetDatabaseAsync();
+        using var client = CreateMasterMaintainerClient();
+        var customerId = await CreateCustomerHistoryAsync(client, "CUST001", "得意先", "2026-01-01");
+        var productId = await CreateProductHistoryAsync(client, "P001", "商品A", 100.00m, "STANDARD", true, "2026-01-01");
+        await CreateTaxRateAsync(client, "STANDARD", 0.10m, "2026-01-01");
+
+        using var response = await client.GetAsync(
+            $"/api/sales/line-preview?salesDate=2026-04-15&customerId={customerId}&productId={productId}");
+        var preview = await response.Content.ReadFromJsonAsync<SalesLinePreviewResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(preview);
+        Assert.True(preview.IsDiscontinued);
     }
 
     [Fact]

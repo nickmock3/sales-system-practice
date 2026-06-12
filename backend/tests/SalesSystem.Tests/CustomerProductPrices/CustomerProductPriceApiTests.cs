@@ -1,8 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
+using Microsoft.Extensions.DependencyInjection;
 using SalesSystem.Api.Persistence;
 using SalesSystem.Tests.Auth;
 
@@ -334,8 +335,13 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
         var detail = Assert.Single(detailSale.Details);
         Assert.Equal(100.00m, detail.UnitPrice);
         Assert.Equal(100.00m, detail.AutoUnitPrice);
-        Assert.NotNull(detail.CustomerProductPriceId);
+        Assert.Equal("CUSTOMER_PRODUCT_PRICE", detail.UnitPriceSource);
         Assert.False(detail.IsManualUnitPrice);
+
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var savedDetail = await dbContext.SaleDetails.AsNoTracking().SingleAsync(item => item.SaleId == sale!.SaleId);
+        Assert.NotNull(savedDetail.CustomerProductPriceId);
     }
 
     [Fact]
@@ -535,17 +541,15 @@ public sealed class CustomerProductPriceApiTests : IClassFixture<SalesSystemWebA
     private sealed record SaleDetailLineResponse(
         long SaleDetailId,
         long ProductId,
-        long ProductVersionId,
         string ProductCode,
         string ProductName,
         string Unit,
-        long TaxRateId,
         string TaxCategory,
         string TaxCategoryName,
         string AccountingCategory,
         decimal Quantity,
         decimal UnitPrice,
-        long? CustomerProductPriceId,
+        string UnitPriceSource,
         bool IsManualUnitPrice,
         decimal AutoUnitPrice,
         string? ManualUnitPriceReason,

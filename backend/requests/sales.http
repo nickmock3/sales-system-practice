@@ -14,12 +14,12 @@ X-Dummy-User: {{user}}
 GET {{baseUrl}}/api/sales/1
 X-Dummy-User: {{user}}
 
-### 売上プレビュー(得意先)
-GET {{baseUrl}}/api/sales/preview-customer?customerId=1&salesDate=2026-04-15
+### 売上明細入力補助
+GET {{baseUrl}}/api/sales/line-preview?salesDate=2026-04-15&customerId=1&productId=1
 X-Dummy-User: {{user}}
 
-### 売上プレビュー(商品)
-GET {{baseUrl}}/api/sales/preview-product?productId=1&salesDate=2026-04-15
+### 売上日時点の得意先確認は得意先 API を使用
+GET {{baseUrl}}/api/customers/1?asOf=2026-04-15
 X-Dummy-User: {{user}}
 
 ### 売上登録

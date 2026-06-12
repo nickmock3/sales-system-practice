@@ -2,7 +2,7 @@ using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SalesSystem.Api.Auth;
 using SalesSystem.Api.Domain.Entities;
-using SalesSystem.Api.Features.Customers;
+using SalesSystem.Api.Features.Shared;
 using SalesSystem.Api.Persistence;
 
 namespace SalesSystem.Api.Features.Sales;
@@ -22,16 +22,10 @@ public static class SaleEndpoints
         group.MapGet("/", GetSales)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
+        group.MapGet("/line-preview", LinePreview)
+            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
+
         group.MapGet("/{saleId:long}", GetSale)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
-
-        group.MapGet("/preview-customer", PreviewCustomer)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
-
-        group.MapGet("/preview-product", PreviewProduct)
-            .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
-
-        group.MapGet("/preview-sales-line", PreviewSalesLine)
             .RequireAuthorization(AuthorizationPolicies.AuthenticatedUser);
 
         return endpoints;
@@ -58,7 +52,7 @@ public static class SaleEndpoints
         if (customer is null)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
+            return Results.NotFound(new { message = "指定日時点で利用できる得意先情報がありません。" });
         }
 
         var resolvedLines = await ResolveSalesLinesAsync(
@@ -364,7 +358,6 @@ public static class SaleEndpoints
                     item.sale.SalesDate,
                     item.customer.Id,
                     item.customer.CustomerCode,
-                    item.customerVersion.Id,
                     item.customerVersion.Name,
                     item.sale.TotalAmount,
                     item.sale.CreatedAt,
@@ -391,117 +384,7 @@ public static class SaleEndpoints
             : Results.Ok(response);
     }
 
-    private static async Task<IResult> PreviewCustomer(
-        AppDbContext dbContext,
-        long customerId,
-        DateTime salesDate,
-        CancellationToken cancellationToken)
-    {
-        if (salesDate == default)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                [nameof(salesDate)] = ["売上日は必須です。"]
-            });
-        }
-
-        var customer = await dbContext.Customers
-            .AsNoTracking()
-            .Where(customer => customer.Id == customerId)
-            .Select(customer => new { customer.Id, customer.CustomerCode })
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (customer is null)
-        {
-            return Results.NotFound(new { message = "得意先が見つかりません。" });
-        }
-
-        var date = salesDate.Date;
-        var version = await dbContext.CustomerVersions
-            .AsNoTracking()
-            .Where(version => version.CustomerId == customerId && version.ValidFrom <= date)
-            .OrderByDescending(version => version.ValidFrom)
-            .ThenByDescending(version => version.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (version is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
-        }
-
-        return Results.Ok(new CustomerSummary(
-            customer.Id,
-            customer.CustomerCode,
-            version.Name,
-            version.Address,
-            version.PhoneNumber,
-            version.ValidFrom));
-    }
-
-    private static async Task<IResult> PreviewProduct(
-        AppDbContext dbContext,
-        long productId,
-        DateTime salesDate,
-        CancellationToken cancellationToken)
-    {
-        if (salesDate == default)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                [nameof(salesDate)] = ["売上日は必須です。"]
-            });
-        }
-
-        var product = await dbContext.Products
-            .AsNoTracking()
-            .Where(product => product.Id == productId)
-            .Select(product => new { product.Id, product.ProductCode })
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (product is null)
-        {
-            return Results.NotFound(new { message = "商品が見つかりません。" });
-        }
-
-        var date = salesDate.Date;
-        var version = await dbContext.ProductVersions
-            .AsNoTracking()
-            .Where(version => version.ProductId == productId && version.ValidFrom <= date)
-            .OrderByDescending(version => version.ValidFrom)
-            .ThenByDescending(version => version.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (version is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる商品履歴がありません。" });
-        }
-
-        var taxRate = await dbContext.TaxRates
-            .AsNoTracking()
-            .Where(rate => rate.TaxCategory == version.TaxCategory && rate.ValidFrom <= date)
-            .OrderByDescending(rate => rate.ValidFrom)
-            .ThenByDescending(rate => rate.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (taxRate is null)
-        {
-            return Results.NotFound(new { message = "対象日に適用できる税率がありません。" });
-        }
-
-        return Results.Ok(new SalesProductPreviewResponse(
-            version.ProductId,
-            product.ProductCode,
-            version.Id,
-            version.Name,
-            version.Unit,
-            version.StandardUnitPrice,
-            version.TaxCategory,
-            taxRate.Rate,
-            version.IsDiscontinued,
-            version.ValidFrom));
-    }
-
-    private static async Task<IResult> PreviewSalesLine(
+    private static async Task<IResult> LinePreview(
         AppDbContext dbContext,
         long customerId,
         long productId,
@@ -520,7 +403,7 @@ public static class SaleEndpoints
         var customer = await LoadCustomerAsync(dbContext, customerId, date, cancellationToken);
         if (customer is null)
         {
-            return Results.NotFound(new { message = "対象日に適用できる得意先履歴がありません。" });
+            return Results.NotFound(new { message = "指定日時点で利用できる得意先情報がありません。" });
         }
 
         var resolvedLine = await ResolveSalesLineAsync(dbContext, customer.CustomerId, productId, date, cancellationToken);
@@ -532,17 +415,15 @@ public static class SaleEndpoints
         return Results.Ok(new SalesLinePreviewResponse(
             resolvedLine.ProductId,
             resolvedLine.ProductCode,
-            resolvedLine.ProductVersionId,
             resolvedLine.Name,
             resolvedLine.Unit,
             resolvedLine.AutoUnitPrice,
-            resolvedLine.CustomerProductPriceId,
+            ResolveUnitPriceSource(resolvedLine.CustomerProductPriceId),
             resolvedLine.TaxCategory,
             resolvedLine.TaxCategoryName,
+            resolvedLine.AccountingCategory,
             resolvedLine.TaxRate,
-            resolvedLine.TaxRateId,
-            resolvedLine.IsDiscontinued,
-            resolvedLine.ProductVersionValidFrom));
+            resolvedLine.IsDiscontinued));
     }
 
     private static async Task<SaleResponse?> BuildSaleResponse(
@@ -604,17 +485,17 @@ public static class SaleEndpoints
             select new SaleDetailLineResponse(
                 detail.Id,
                 detail.ProductId,
-                detail.ProductVersionId,
                 product.ProductCode,
                 productVersion.Name,
                 productVersion.Unit,
-                detail.TaxRateId,
                 detail.TaxCategory,
                 detail.TaxCategoryName,
                 detail.AccountingCategory,
                 detail.Quantity,
                 detail.UnitPrice,
-                detail.CustomerProductPriceId,
+                detail.CustomerProductPriceId == null
+                    ? UnitPriceSources.ProductStandard
+                    : UnitPriceSources.CustomerProductPrice,
                 detail.IsManualUnitPrice,
                 detail.AutoUnitPrice,
                 detail.ManualUnitPriceReason,
@@ -630,7 +511,6 @@ public static class SaleEndpoints
             .OrderBy(history => history.ChangedAt)
             .ThenBy(history => history.Id)
             .Select(history => new SaleStatusHistoryResponse(
-                history.Id,
                 history.Status.ToString(),
                 history.Reason,
                 history.ChangedAt,
@@ -650,7 +530,6 @@ public static class SaleEndpoints
             header.SalesDate,
             header.CustomerId,
             header.CustomerCode,
-            header.CustomerVersionId,
             header.CustomerName,
             header.TotalAmount,
             header.CreatedAt,
@@ -698,6 +577,13 @@ public static class SaleEndpoints
     private static string GetUserName(ClaimsPrincipal user)
     {
         return user.Identity?.Name?.Trim() is { Length: > 0 } name ? name : "unknown";
+    }
+
+    private static string ResolveUnitPriceSource(long? customerProductPriceId)
+    {
+        return customerProductPriceId is null
+            ? UnitPriceSources.ProductStandard
+            : UnitPriceSources.CustomerProductPrice;
     }
 
     private static IResult BuildSalesLineResolutionErrorResult(SalesLineResolution resolvedLine)
@@ -786,19 +672,19 @@ public static class SaleEndpoints
         {
             if (!productsById.TryGetValue(productId, out var product))
             {
-                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductNotFound, "商品が見つかりません。"));
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductNotFound, "指定日時点で利用できる商品情報がありません。"));
                 continue;
             }
 
             if (!latestProductVersionsByProductId.TryGetValue(productId, out var productVersion))
             {
-                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductVersionNotFound, "対象日に適用できる商品履歴がありません。"));
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.ProductVersionNotFound, "指定日時点で利用できる商品情報がありません。"));
                 continue;
             }
 
             if (!latestTaxRatesByCategory.TryGetValue(productVersion.TaxCategory, out var taxRate))
             {
-                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.TaxRateNotFound, "対象日に適用できる税率がありません。"));
+                resolvedLines.Add(SalesLineResolution.Failed(SalesLineResolutionErrorKind.TaxRateNotFound, "指定日時点で利用できる税率情報がありません。"));
                 continue;
             }
 

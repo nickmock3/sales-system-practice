@@ -16,7 +16,6 @@ public sealed record SaleListItemResponse(
     DateTime SalesDate,
     long CustomerId,
     string CustomerCode,
-    long CustomerVersionId,
     string CustomerName,
     decimal TotalAmount,
     DateTime CreatedAt,
@@ -30,17 +29,15 @@ public sealed record SaleListItemResponse(
 public sealed record SaleDetailLineResponse(
     long SaleDetailId,
     long ProductId,
-    long ProductVersionId,
     string ProductCode,
     string ProductName,
     string Unit,
-    long TaxRateId,
     string TaxCategory,
     string TaxCategoryName,
     string AccountingCategory,
     decimal Quantity,
     decimal UnitPrice,
-    long? CustomerProductPriceId,
+    string UnitPriceSource,
     bool IsManualUnitPrice,
     decimal AutoUnitPrice,
     string? ManualUnitPriceReason,
@@ -53,7 +50,6 @@ public sealed record SaleResponse(
     DateTime SalesDate,
     long CustomerId,
     string CustomerCode,
-    long CustomerVersionId,
     string CustomerName,
     decimal TotalAmount,
     DateTime CreatedAt,
@@ -68,7 +64,6 @@ public sealed record SaleResponse(
     List<SaleDetailLineResponse> Details);
 
 public sealed record SaleStatusHistoryResponse(
-    long SaleStatusHistoryId,
     string Status,
     string Reason,
     DateTime ChangedAt,
@@ -76,29 +71,15 @@ public sealed record SaleStatusHistoryResponse(
 
 public sealed record CancelSaleRequest(string? Reason);
 
-public sealed record SalesProductPreviewResponse(
-    long ProductId,
-    string ProductCode,
-    long ProductVersionId,
-    string Name,
-    string Unit,
-    decimal StandardUnitPrice,
-    string TaxCategory,
-    decimal TaxRate,
-    bool IsDiscontinued,
-    DateTime ValidFrom);
-
 public sealed record SalesLinePreviewResponse(
     long ProductId,
     string ProductCode,
-    long ProductVersionId,
-    string Name,
+    string ProductName,
     string Unit,
     decimal AutoUnitPrice,
-    long? CustomerProductPriceId,
+    string UnitPriceSource,
     string TaxCategory,
     string TaxCategoryName,
+    string AccountingCategory,
     decimal TaxRate,
-    long TaxRateId,
-    bool IsDiscontinued,
-    DateTime ProductVersionValidFrom);
+    bool IsDiscontinued);
