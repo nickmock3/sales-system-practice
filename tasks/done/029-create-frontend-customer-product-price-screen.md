@@ -106,3 +106,69 @@
 - 単価根拠とフォールバック表示の実装方針
 - 実行した確認コマンドと結果
 - 残した制約や次タスク候補
+
+---
+
+## 実装概要
+
+`frontend/src/app/customer-product-prices/` に得意先別商品単価画面を追加した。商品・得意先・税率マスタと同様に、一覧＋選択サマリー、初回登録、単価変更、変更履歴、指定日プレビューを 1 画面で扱う。
+
+主なファイル:
+
+- `page.tsx` — 画面本体。`customerId:productId` の複合キーで行選択、`useListSelectionState`、URL 検索パラメータからの初回絞り込み、非同期応答の世代管理
+- `_api.ts` — 一覧・登録・変更・履歴・プレビュー合成 API クライアント
+- `_types.ts` / `_schemas.ts` — DTO 型と Zod スキーマ
+- `_selection.ts` — 複合選択キーと URL パラメータ解析
+- `_field-errors.ts` — ValidationProblem キーの camelCase 変換
+- `_change-status.ts` — 変更履歴の適用状態分類
+
+Vitest: `_schemas.test.ts`, `_field-errors.test.ts`, `_selection.test.ts`, `_change-status.test.ts`, `_api.test.ts`
+
+E2E: `frontend/e2e/customer-product-prices.spec.ts`（モック API）
+
+## API クライアント
+
+- `fetchCustomerProductPrices` — `GET /api/customer-product-prices`（`customerId`, `productId`, `customerCode`, `productCode`）
+- `createCustomerProductPrice` — `POST /api/customer-product-prices`
+- `changeCustomerProductPrice` — `POST /api/customer-product-prices/{customerId}/{productId}/changes`
+- `fetchCustomerProductPriceChanges` — `GET .../changes`
+- `fetchCustomerProductPriceAsOf` — `GET .../{customerId}/{productId}?asOf=`
+- `fetchCustomerProductPricePreviewComposed` — `GET /preview` に加え、`fetchProductAsOf` と、根拠が `CUSTOMER_PRODUCT_PRICE` のときのみ `fetchCustomerProductPriceAsOf` を呼び、`CustomerProductPricePreviewComposed` を返す
+
+初回登録フォームの得意先・商品選択肢は、既存の `fetchCustomers` / `fetchProducts` を利用。
+
+## 単価根拠とフォールバック表示
+
+- `unitPriceSourceLabels` で `CUSTOMER_PRODUCT_PRICE` → 「得意先別商品単価」、`PRODUCT_STANDARD` → 「商品標準単価（フォールバック）」
+- プレビュー DTO に `effectiveFrom` が無いため、`_api.ts` で商品 asOf と（得意先別単価採用時のみ）得意先別単価 asOf を合成
+- `PRODUCT_STANDARD` 時は得意先別商品単価の適用開始日を `—` 表示
+- 変更履歴 DTO に identity が無いため、選択中サマリーの得意先・商品コード/名を各行に表示。行キーは `effectiveFrom|unitPrice|createdAt`
+
+## 確認コマンドと結果
+
+```bash
+cd frontend && bun lint
+# 成功
+
+cd frontend && bun run test
+# Test Files  14 passed (14)
+# Tests       49 passed (49)
+
+cd frontend && bunx playwright test e2e/customer-product-prices.spec.ts
+# 7 passed
+
+cd frontend && bunx tsc --noEmit
+# 成功
+
+cd frontend && bun run build
+# 成功。/customer-product-prices を静的ページとして生成
+```
+
+補足: `package.json` の Vitest 実行は `bun run test`。`bun test` は Bun ネイティブランナーが e2e も拾うため、本タスクの単体テスト確認は `bun run test` を使用した。
+
+## 残した制約・次タスク候補
+
+- プレビューは選択中の組み合わせに紐づけて参照する（一覧未選択時は案内メッセージ）
+- バックエンド preview DTO に `effectiveFrom` が追加された場合は合成 API 呼び出しを簡略化できる
+- タスク 030（売上入力画面）で `line-preview` と同じ根拠表示を再利用する余地あり
+- Playwright は API モックを使った画面 E2E であり、実バックエンドとの主要正常系結合確認は別途実施対象とする
